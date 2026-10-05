@@ -1,11 +1,10 @@
 # AGENTS.md
 
 `@fufu1437/dsh-model-commands` is a DeepSeek Harness (DSH) plugin bundle that
-turns commands the user declares into **model-facing tools**. It is a
-standalone, dependency-free npm package: a Host half (`index.js`) that keeps the
-command table and registers one `ctx.tools` definition per command, and a
-browser half (`client.js`) that renders the table as a page in **Settings →
-Model commands**.
+turns commands into **model-facing lookup tools**. It is a standalone,
+dependency-free npm package: a Host half (`index.js`) that keeps the command
+table and registers one `ctx.tools` definition per command, and a browser half
+(`client.js`) that renders the table as a page in **Settings → Model commands**.
 
 Read [README.md](README.md) for behavior and [README.zh.md](README.zh.md) for
 the Chinese page; both describe the same product and must move together.
@@ -31,43 +30,47 @@ framework.
 | `cordis.patch.yml` | Bundle patch that inserts the one Host row |
 | `locale/en.json`, `locale/zh.json` | Plugin display metadata read by the Plugin Manager (`meta.title`, `meta.description`) |
 | `icon.svg` | Plugin icon, declared as a top-level `icon` in the manifest |
-| `scripts/selftest.mjs` | The suite: pure functions plus one tool-definition run against a stub shell |
+| `scripts/selftest.mjs` | The suite: pure functions plus one tool-definition call |
 
-## Model experience
+## What the plugin is, and is not
 
-**The declared command IS the tool.** There is no wrapper tool and no
-indirection: one table row becomes exactly one `ctx.tools.register` definition
-whose name, description, and `parameters` schema are what the model reads.
-
-- **`description` is the only selection signal the model gets.** It is required
-  and must say *when* to use the command; validation rejects an empty or
-  whitespace-only description rather than defaulting one.
-- **Argument descriptions live on the argument**, in the generated schema —
-  never restated in the tool description.
-- The result text is a stable, greppable shape: `$ <line>`, `exit code: …`,
-  then `--- stdout ---` and `--- stderr ---` sections. Keep it; the model reads
-  it literally.
-- Exit codes are results, not failures. Never turn a nonzero exit into a
-  thrown error; only a *pre-execution* problem (missing required argument,
-  wrong type) throws.
+- **It executes nothing.** No shell, no sandbox policy, no quoting, no exit
+  codes, no process. It puts a command's usage, arguments, and purpose in the
+  model's hands; the model runs it with the tools the deployment already
+  provides. Do not add an execution path back here without the maintainer asking
+  for it explicitly — the whole design is "documentation loaded on demand".
+- **The declared command IS the tool.** One table row becomes exactly one
+  `ctx.tools.register` definition; there is no wrapper tool and no indirection.
+- **Two pieces of text, two jobs.** `description` (说明) is the one line in the
+  model's tool list and the only thing the model reads when choosing between
+  tools; it is required. `detail` (描述) is the body a call returns — usage,
+  flags, real purpose; it is optional, and with no detail the tool answers with
+  the description.
+- **A detail or at least one argument is required.** An entry that only repeats
+  its own one-line description has nothing to answer with; `normalizeCommand`
+  rejects it with a per-command message.
+- **The detail is the only thing a call costs.** Keep the result bare: the
+  rendered detail, nothing else. Do not prepend a header, a command-line echo, or
+  a usage banner.
 
 ## Substitution invariants — do not weaken these
 
-`renderCommand` is single-pass and type-directed. It is the whole security
-model; a shortcut here is a shell-injection defect.
+`renderDetail` is single-pass and type-directed. The values are plain text (no
+shell exists here), but the validation is what keeps a model-supplied value from
+being silently mangled or from widening a `choices` contract.
 
-- `string` is quoted by `quoteShell` (`'` → `'\''`) and is therefore always
-  exactly one word. Never interpolate a string value unquoted.
-- `number` / `integer` must parse as a finite number / integer before
-  substitution. Never pass the raw model text through.
+- `string` is inserted verbatim; never trim, quote, or otherwise rewrite it.
+- `number` must parse as a finite number before insertion.
 - `boolean` substitutes only the author-declared `trueText` / `falseText`;
-  model input never reaches the command line for that argument.
+  model input never reaches the text for that argument.
 - A `string` with `choices` is validated against the list first.
 - Substitution happens in one `String.replace` pass, so a value that contains
   `{{other}}` is data, never a second expansion. Do not "fix" a nested
   placeholder by looping the replacement.
-- Every placeholder must be declared and every declared argument must be used;
-  `normalizeCommand` rejects both mismatches with a per-command message.
+- When a detail exists, placeholders and declared arguments must match exactly in
+  both directions: an undeclared placeholder and an unused argument are both
+  errors. When no detail exists, arguments are validated on their own.
+- There is no `integer` type: `number` covers integral values deliberately.
 
 ## Table and routes
 
@@ -80,6 +83,8 @@ model; a shortcut here is a shell-injection defect.
   valid and returns one diagnostic per rejected row; registration failures
   (for example a name already taken by another tool) are collected the same way
   instead of throwing away the table.
+- `command` is the pre-0.2.0 name of `detail`. It is still read as a fallback so
+  an upgrade does not lose text; it is never written back.
 - Every route calls `connection.requestRejection(req)` before doing anything
   else. That fence plus the browser-session cookie is what makes the table
   user-only.
@@ -114,14 +119,18 @@ model; a shortcut here is a shell-injection defect.
 - Do not write DOM outside the component or append to `document.body`.
 - When the Host rejects a save, keep the editor open: the draft is the only
   copy of what the user typed.
+- The argument table is a six-column grid; the header labels carry the same
+  inline padding as the controls they label, and the argument button fills its
+  column. Keep the header and the rows aligned when you touch that CSS.
 
 ## Verification
 
 - `npm run check && npm test` must pass before any commit that touches
   `index.js`, `client.js`, or the suite. New behavior needs new assertions.
-- The security-relevant assertions are the quoting ones: a hostile string must
-  come out as one inert word, a non-numeric `number` must throw, and a value
-  containing `{{x}}` must not expand. Do not delete them.
+- The load-bearing assertions are the substitution ones: a `number` that is not
+  a number must throw, a value containing `{{x}}` must not expand, `choices`
+  must be enforced, and a command with neither detail nor argument must be
+  rejected. Do not delete them.
 - A Host-half change is **not live** in a running Harness until the row is
   reloaded: the Loader caches the imported module. In the profile used here,
   flipping the entry's `disabled` in `<profile>/cordis.patch.yml`
@@ -146,6 +155,9 @@ npm publish                # publishConfig pins access=public + registry.npmjs.o
 
 - Publishing and pushing a release are the maintainer's call. Do not publish
   or push a tag without an explicit instruction.
+- After `npm publish` the packument can 404 for a few minutes while the CDN
+  catches up; `dist-tags` shows the new `latest` first. That is propagation, not
+  failure — do not republish on it.
 - The auth token must sit under the correctly spelled
   `//registry.npmjs.org/:_authToken` key; a token stored without the slash
   before the colon is never read, and publishing then fails with a misleading

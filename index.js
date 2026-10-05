@@ -1,37 +1,43 @@
 /**
  * Host half of `@fufu1437/dsh-model-commands`.
  *
- * One idea: **the user declares a command once, and the model can call it.**
- * Every entry in the plugin's command table becomes a first-class model-facing
- * tool — the same surface as `bash`, `read`, or `edit` — so the model invokes
- * it directly instead of writing a shell script around it.
+ * One idea: **declare a command once, and the model can look it up.**
+ * Every entry in the plugin's table becomes a model-facing tool — the same
+ * surface as `bash`, `read`, or `edit` — so the model gets one command's usage,
+ * flags, and real purpose on demand instead of carrying every command's
+ * documentation in its prompt from the first turn.
  *
- * The command table lives in a JSON file under the Harness home
- * (`<DSH_HOME>/model-commands/commands.json`). The browser half of this plugin
- * renders that table as a page in **Settings → Model commands**; the two
- * fenced HTTP routes below are the only way it is read and replaced:
+ * A definition carries two pieces of text:
+ *
+ * - `description` (说明) is the one line the model reads when choosing between
+ *   tools. It is required, and it is the only thing an idle tool costs.
+ * - `detail` (描述) is the body the model receives when it calls the tool: what
+ *   the command does, how its arguments are spelled, and when it is the right
+ *   one. It is optional, and when it is absent the tool answers with the
+ *   description. At least one of `detail` and `args` must be present, so an
+ *   entry always has something to say.
+ *
+ * `detail` may contain `{{argument}}` placeholders filled from the call's
+ * arguments, so one entry can cover several related invocations. Substitution
+ * is single-pass and type-directed (see `renderDetail`), and the arguments are
+ * projected onto a JSON Schema the model sees.
+ *
+ * This plugin runs nothing. It hands the model the exact command line, its
+ * flags, and its purpose; the model executes it with the tools the deployment
+ * already provides.
+ *
+ * The table lives in a JSON file under the Harness home
+ * (`<DSH_HOME>/model-commands/commands.json`). The browser half renders it as a
+ * page in **Settings → Model commands**; the two fenced HTTP routes below are
+ * the only way it is read and replaced:
  *
  * - `GET  /dsh-model-commands/commands` returns the stored table;
  * - `POST /dsh-model-commands/commands` replaces it, then re-registers the
  *   model-facing tools in the same step.
  *
- * A command definition carries the model-facing metadata (tool name,
- * description, arguments) and the command line to run. The command line is a
- * template: each `{{arg}}` placeholder is filled from the call's arguments.
- * Each argument is shell-quoted according to its declared type before it is
- * substituted — a model-supplied string can never escape its argument, a
- * `number`/`integer` argument must parse as a number, and a `boolean`
- * argument substitutes only the author-declared `trueText` / `falseText`.
- *
- * Commands run through the composed `ctx.shell` executor, so they inherit the
- * deployment's shell (local or sandboxed) and the calling session's sandbox
- * policy, working directory, and cancellation. Exit codes are results, not
- * failures: the tool returns the exit code plus stdout/stderr exactly as the
- * executor collected them.
- *
- * The module imports nothing outside `node:` builtins, so the published
- * package carries no dependency on unpublished `@deepseek-ai/*` packages and
- * no configuration schema is required for it to work.
+ * The module imports nothing outside `node:` builtins, so the published package
+ * carries no dependency on unpublished `@deepseek-ai/*` packages and no
+ * configuration schema is required for it to work.
  *
  * @module @fufu1437/dsh-model-commands
  */
@@ -39,13 +45,13 @@
 import { readFileSync } from 'node:fs'
 import { mkdir, rename, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { dirname, isAbsolute, join } from 'node:path'
+import { dirname, join } from 'node:path'
 
 /** Cordis plugin (function-plugin) name. */
 export const name = 'dsh-model-commands'
 
 /** The composed services this plugin cannot work without. */
-export const inject = ['tools', 'shell']
+export const inject = ['tools']
 
 /** Route prefix owned by this plugin. */
 const ROUTE_PREFIX = '/dsh-model-commands'
@@ -62,17 +68,20 @@ export const NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_-]{0,47}$/
 /** Argument names must be usable as `{{placeholders}}` and as identifiers. */
 export const ARG_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]{0,47}$/
 
-/** The argument types a command may declare. */
-export const ARG_TYPES = ['string', 'number', 'integer', 'boolean']
+/**
+ * The argument types a command may declare. `number` covers integral values
+ * too, so there is no separate `integer` type.
+ */
+export const ARG_TYPES = ['string', 'number', 'boolean']
 
-/** `{{name}}` inside a command template. */
+/** `{{name}}` inside a description. */
 const PLACEHOLDER_PATTERN = /\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/g
 
-/** Default per-command deadline when neither the command nor the config sets one. */
-const DEFAULT_TIMEOUT_MS = 60_000
+/** Ceiling on the one-line selection signal. */
+const DESCRIPTION_MAX_LENGTH = 4096
 
-/** Hard ceiling on a per-command deadline, so the model cannot hang a turn. */
-const MAX_TIMEOUT_MS = 3_600_000
+/** Ceiling on the returned body; it is paid for on every call. */
+const DETAIL_MAX_LENGTH = 32768
 
 /** Where the table lives when the config does not say. */
 const DEFAULT_STORE_DIRNAME = 'model-commands'
@@ -84,8 +93,8 @@ const DEFAULT_STORE_FILENAME = 'commands.json'
 
 /**
  * Resolve the Loader row's config into the values this plugin uses.
- * Every field is optional and every field is clamped, so a hand-written
- * `cordis.patch.yml` row can never produce an unusable plugin.
+ * Every field is optional, so a hand-written `cordis.patch.yml` row can never
+ * produce an unusable plugin.
  * @param config - the Loader row's raw config.
  * @returns the resolved configuration.
  */
@@ -95,13 +104,7 @@ export function resolveConfig(config) {
   const storePath = typeof raw.storePath === 'string' && raw.storePath.length > 0
     ? raw.storePath
     : join(dshHome, DEFAULT_STORE_DIRNAME, DEFAULT_STORE_FILENAME)
-  const defaultCwd = typeof raw.defaultCwd === 'string' && raw.defaultCwd.length > 0
-    ? raw.defaultCwd
-    : undefined
-  const timeoutMs = Number.isFinite(raw.timeoutMs) && raw.timeoutMs > 0
-    ? Math.min(Math.floor(raw.timeoutMs), MAX_TIMEOUT_MS)
-    : DEFAULT_TIMEOUT_MS
-  return { dshHome, storePath, defaultCwd, timeoutMs }
+  return { dshHome, storePath }
 }
 
 /* -------------------------------------------------------------------------- */
@@ -215,6 +218,13 @@ export function normalizeArgument(raw, index) {
 
 /**
  * Normalize and validate one command definition.
+ *
+ * `detail` is optional and `args` is optional, but **at least one of them must
+ * be present**: an entry that only repeats its own one-line description has
+ * nothing to answer with. A definition written before version 0.2.0 carries its
+ * body in `command`; that value is adopted as `detail`, so upgrading does not
+ * lose text.
+ *
  * @param raw - the raw definition from the table.
  * @param index - its position, used in diagnostics.
  * @returns `{ ok: true, value }` or `{ ok: false, error }`.
@@ -230,8 +240,19 @@ export function normalizeCommand(raw, index) {
   if (!isFilledString(raw.description)) {
     return { ok: false, error: `${label}: description is required — it is the only thing the model reads when choosing this command` }
   }
-  if (!isFilledString(raw.command)) {
-    return { ok: false, error: `${label}: command is required — it is the shell line this command runs` }
+  if (raw.description.length > DESCRIPTION_MAX_LENGTH) {
+    return { ok: false, error: `${label}: description must be at most ${String(DESCRIPTION_MAX_LENGTH)} characters` }
+  }
+  for (const field of ['detail', 'command']) {
+    if (raw[field] !== undefined && typeof raw[field] !== 'string') {
+      return { ok: false, error: `${label}: ${field} must be a string` }
+    }
+  }
+  // `command` is the pre-0.2.0 name of this field; its text is documentation,
+  // so it migrates as-is.
+  const detail = isFilledString(raw.detail) ? raw.detail : (isFilledString(raw.command) ? raw.command : undefined)
+  if (detail !== undefined && detail.length > DETAIL_MAX_LENGTH) {
+    return { ok: false, error: `${label}: detail must be at most ${String(DETAIL_MAX_LENGTH)} characters` }
   }
   const rawArgs = raw.args === undefined ? [] : raw.args
   if (!Array.isArray(rawArgs)) return { ok: false, error: `${label}: args must be an array` }
@@ -244,33 +265,30 @@ export function normalizeCommand(raw, index) {
     seen.add(normalized.value.name)
     args.push(normalized.value)
   }
-  const placeholders = new Set()
-  for (const match of raw.command.matchAll(PLACEHOLDER_PATTERN)) placeholders.add(match[1])
-  const undeclared = [...placeholders].filter((token) => !seen.has(token))
-  if (undeclared.length > 0) {
-    return { ok: false, error: `${label}: command uses undeclared placeholder(s) ${undeclared.map((token) => `{{${token}}}`).join(', ')}` }
+  if (detail === undefined && args.length === 0) {
+    return { ok: false, error: `${label}: a command needs a detail (描述) or at least one argument, so a call has something to answer with` }
   }
-  for (const token of seen) {
-    if (!placeholders.has(token)) {
-      return { ok: false, error: `${label}: argument "${token}" is declared but never used in the command line` }
+  if (detail !== undefined) {
+    const placeholders = new Set()
+    for (const match of detail.matchAll(PLACEHOLDER_PATTERN)) placeholders.add(match[1])
+    const undeclared = [...placeholders].filter((token) => !seen.has(token))
+    if (undeclared.length > 0) {
+      return { ok: false, error: `${label}: detail uses undeclared placeholder(s) ${undeclared.map((token) => `{{${token}}}`).join(', ')}` }
     }
-  }
-  if (raw.timeoutMs !== undefined && (!Number.isFinite(raw.timeoutMs) || raw.timeoutMs <= 0)) {
-    return { ok: false, error: `${label}: timeoutMs must be a positive number` }
-  }
-  if (raw.cwd !== undefined && (typeof raw.cwd !== 'string' || raw.cwd.length === 0)) {
-    return { ok: false, error: `${label}: cwd must be a non-empty string` }
+    for (const token of seen) {
+      if (!placeholders.has(token)) {
+        return { ok: false, error: `${label}: argument "${token}" is declared but never used as {{${token}}} in the detail` }
+      }
+    }
   }
   return {
     ok: true,
     value: {
       name: raw.name,
       description: raw.description.trim(),
-      command: raw.command,
+      ...(detail === undefined ? {} : { detail: detail.trim() }),
       args,
       ...(isFilledString(raw.title) ? { title: raw.title.trim() } : {}),
-      ...(typeof raw.cwd === 'string' && raw.cwd.length > 0 ? { cwd: raw.cwd } : {}),
-      ...(raw.timeoutMs !== undefined ? { timeoutMs: Math.min(Math.floor(raw.timeoutMs), MAX_TIMEOUT_MS) } : {}),
       ...(raw.enabled === false ? { enabled: false } : {}),
     },
   }
@@ -304,25 +322,16 @@ export function validateList(list) {
 }
 
 /* -------------------------------------------------------------------------- */
-/* Rendering a command line                                                   */
+/* Rendering the returned body                                                */
 /* -------------------------------------------------------------------------- */
 
 /**
- * Quote one value for a POSIX shell word.
- * Single quotes preserve every byte except the quote itself, which is closed,
- * escaped, and reopened — so the result is always exactly one word.
- * @param value - the value to quote.
- * @returns the quoted word.
- */
-export function quoteShell(value) {
-  return `'${String(value).replaceAll("'", "'\\''")}'`
-}
-
-/**
  * Fill one declared argument into its placeholder text.
+ * The value is inserted as plain text: this plugin builds no command line, so
+ * nothing here is shell syntax and nothing needs quoting.
  * @param argument - the normalized declaration.
  * @param raw - the model-supplied value, or undefined.
- * @returns the shell text to substitute.
+ * @returns the text to substitute.
  * @throws when a required value is missing or a value has the wrong type.
  */
 export function renderArgument(argument, raw) {
@@ -342,37 +351,34 @@ export function renderArgument(argument, raw) {
       if (!Number.isFinite(numeric)) throw new Error(`argument "${argument.name}" must be a number`)
       return String(numeric)
     }
-    case 'integer': {
-      const numeric = typeof value === 'number' ? value : Number(value)
-      if (!Number.isInteger(numeric)) throw new Error(`argument "${argument.name}" must be an integer`)
-      return String(numeric)
-    }
     default: {
       const text = String(value)
       if (argument.choices !== undefined && !argument.choices.includes(text)) {
         throw new Error(`argument "${argument.name}" must be one of ${argument.choices.map((choice) => JSON.stringify(choice)).join(', ')}`)
       }
-      return quoteShell(text)
+      return text
     }
   }
 }
 
 /**
- * Render a command's shell line by substituting every `{{arg}}` placeholder.
+ * Render the body a call returns.
  * Substitution is single-pass, so a value that itself contains `{{...}}` is
- * data, never a second round of template expansion.
+ * data, never a second round of template expansion. A command with no detail
+ * answers with its description.
  * @param command - the normalized definition.
  * @param args - the model-supplied argument object.
- * @returns the shell line to execute.
+ * @returns the text the model receives.
  * @throws when a declared argument cannot be rendered.
  */
-export function renderCommand(command, args) {
+export function renderDetail(command, args) {
+  if (command.detail === undefined) return command.description
   const input = args !== null && typeof args === 'object' && !Array.isArray(args) ? args : {}
   const rendered = new Map()
   for (const argument of command.args) rendered.set(argument.name, renderArgument(argument, input[argument.name]))
-  return command.command.replace(PLACEHOLDER_PATTERN, (_match, token) => {
+  return command.detail.replace(PLACEHOLDER_PATTERN, (_match, token) => {
     const text = rendered.get(token)
-    if (text === undefined) throw new Error(`command uses undeclared placeholder {{${token}}}`)
+    if (text === undefined) throw new Error(`detail uses undeclared placeholder {{${token}}}`)
     return text
   })
 }
@@ -396,38 +402,18 @@ export function buildParameters(command) {
   return { type: 'object', properties, required, additionalProperties: false }
 }
 
-/**
- * Format one finished shell run as the text the model reads.
- * @param commandLine - the line that ran.
- * @param result - the executor's run result.
- * @returns the tool result text.
- */
-export function formatRunResult(commandLine, result) {
-  const lines = [`$ ${commandLine}`]
-  lines.push(`exit code: ${result.exitCode === null ? `none (signal ${String(result.signal ?? 'unknown')})` : String(result.exitCode)}`)
-  if (result.timedOut) lines.push(`timed out after ${String(result.timeoutMs)}ms`)
-  if (result.aborted) lines.push('cancelled')
-  if (result.sandbox?.denied === true) lines.push('the sandbox denied this command')
-  const stdout = result.stdout?.text ?? ''
-  const stderr = result.stderr?.text ?? ''
-  lines.push('', '--- stdout ---', stdout.length > 0 ? stdout.replace(/\n$/, '') : '(empty)')
-  lines.push('', '--- stderr ---', stderr.length > 0 ? stderr.replace(/\n$/, '') : '(empty)')
-  if (result.stdout?.truncated === true) lines.push('', `stdout was truncated; full output: ${String(result.stdout.spillPath ?? 'unavailable')}`)
-  if (result.stderr?.truncated === true) lines.push('', `stderr was truncated; full output: ${String(result.stderr.spillPath ?? 'unavailable')}`)
-  return lines.join('\n')
-}
-
 /* -------------------------------------------------------------------------- */
 /* Model-facing tools                                                         */
 /* -------------------------------------------------------------------------- */
 
 /**
  * Build the model-facing tool definition for one command.
+ * The tool answers with the command's detail, so a long usage text is loaded
+ * only when the model actually asks for it.
  * @param command - the normalized command.
- * @param runtime - executor, budgets, and the calling session's policy.
  * @returns a `ctx.tools.register` definition.
  */
-export function createToolDefinition(command, runtime) {
+export function createToolDefinition(command) {
   return {
     name: command.name,
     description: command.description,
@@ -436,43 +422,11 @@ export function createToolDefinition(command, runtime) {
       schema: { type: 'string' },
       render: (_args, value) => [{ type: 'text', text: typeof value === 'string' ? value : JSON.stringify(value) }],
     },
-    async execute(rawArgs, exec) {
-      const commandLine = renderCommand(command, rawArgs)
-      const policy = runtime.sandboxPolicy(exec)
-      const workdir = resolveWorkdir(command.cwd, exec, runtime.defaultCwd, policy)
-      const execution = await runtime.shell.execute(runtime.shell.resolve({
-        command: commandLine,
-        ...(workdir === undefined ? {} : { workdir }),
-        timeoutMs: command.timeoutMs ?? runtime.timeoutMs,
-        onExpiry: 'kill',
-        signal: exec.signal,
-        ...(policy === undefined ? {} : { sandboxPolicy: policy }),
-      }))
-      const result = await execution.result()
-      return formatRunResult(commandLine, result)
+    execute(rawArgs, exec) {
+      exec?.signal?.throwIfAborted?.()
+      return renderDetail(command, rawArgs)
     },
   }
-}
-
-/**
- * Resolve the directory a command runs in.
- * An absolute `cwd` wins; a relative one is resolved against the calling
- * session's workspace, which is also the default when the command declares
- * none. The sandbox policy's workspace root wins over the session header,
- * exactly as the shipped `bash` tool resolves it, so an absolute `cwd`
- * outside the sandbox is still policed by the executor.
- * @param configured - the command's declared `cwd`, if any.
- * @param exec - the tool run context.
- * @param fallback - the plugin's configured default directory, if any.
- * @param policy - the resolved sandbox policy, if any.
- * @returns the working directory, or undefined to let the executor default.
- */
-function resolveWorkdir(configured, exec, fallback, policy) {
-  const sessionCwd = exec?.agent?.session?.header?.cwd
-  const base = policy?.workspaceRoot ?? (typeof sessionCwd === 'string' && sessionCwd.length > 0 ? sessionCwd : undefined) ?? fallback
-  if (configured === undefined) return base
-  if (isAbsolute(configured)) return configured
-  return base === undefined ? configured : join(base, configured)
 }
 
 /* -------------------------------------------------------------------------- */
@@ -525,21 +479,6 @@ export function apply(ctx, config) {
   const resolved = resolveConfig(config)
   const state = { commands: [], errors: [], disposers: [] }
 
-  const runtime = {
-    shell: ctx.shell,
-    timeoutMs: resolved.timeoutMs,
-    defaultCwd: resolved.defaultCwd,
-    sandboxPolicy(exec) {
-      const service = ctx.get('sandboxPolicy')
-      if (service === undefined) return undefined
-      try {
-        return service.resolve(exec?.agent === undefined ? {} : { session: exec.agent.session })
-      } catch {
-        return undefined
-      }
-    },
-  }
-
   /**
    * Replace the live tool registrations with the current table.
    * Each command is registered independently: a name already taken by another
@@ -558,7 +497,7 @@ export function apply(ctx, config) {
     for (const command of state.commands) {
       if (command.enabled === false) continue
       try {
-        state.disposers.push(ctx.tools.register(createToolDefinition(command, runtime)))
+        state.disposers.push(ctx.tools.register(createToolDefinition(command)))
       } catch (error) {
         state.errors.push({ name: command.name, message: String(error?.message ?? error) })
       }
@@ -666,11 +605,9 @@ export const __test = {
   normalizeArgument,
   normalizeCommand,
   validateList,
-  quoteShell,
   renderArgument,
-  renderCommand,
+  renderDetail,
   buildParameters,
-  formatRunResult,
   createToolDefinition,
   COMMANDS_PATH,
 }

@@ -2,10 +2,10 @@
  * Self-test for `@fufu1437/dsh-model-commands`.
  *
  * The module under test imports only `node:` builtins, so it runs without a
- * Harness: this exercises argument rendering, shell quoting, table validation,
- * the durable store, and the tool definition the Host hands to `ctx.tools`.
+ * Harness: this exercises argument rendering, table validation, the durable
+ * store, and the tool definition the Host hands to `ctx.tools`.
  *
- * Run with `pnpm test` (or `node scripts/selftest.mjs`) from the package root.
+ * Run with `npm test` (or `node scripts/selftest.mjs`) from the package root.
  */
 
 import assert from 'node:assert/strict'
@@ -13,18 +13,18 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { __test } from '../index.js'
+import { ARG_TYPES, __test } from '../index.js'
 
 const {
-  quoteShell,
-  renderCommand,
-  validateList,
-  normalizeCommand,
-  buildParameters,
   resolveConfig,
   readStore,
   writeStore,
-  formatRunResult,
+  normalizeArgument,
+  normalizeCommand,
+  validateList,
+  renderArgument,
+  renderDetail,
+  buildParameters,
   createToolDefinition,
 } = __test
 
@@ -46,113 +46,146 @@ function sampleCommand(overrides = {}) {
   return {
     name: 'demo',
     description: 'A demo command.',
-    command: 'demo --name {{who}} --count {{count}} --verbose={{verbose}}',
+    detail: 'demo --name {{who}} --count {{count}} --verbose={{verbose}}',
     args: [
       { name: 'who', type: 'string', required: true },
-      { name: 'count', type: 'integer', default: 3 },
+      { name: 'count', type: 'number', default: 3 },
       { name: 'verbose', type: 'boolean', trueText: 'yes', falseText: 'no' },
     ],
     ...overrides,
   }
 }
 
-await check('quoteShell keeps one word and escapes quotes', () => {
-  assert.equal(quoteShell('hello world'), "'hello world'")
-  assert.equal(quoteShell("it's"), "'it'\\''s'")
+await check('the type set has no integer: number covers integral values', () => {
+  assert.deepEqual(ARG_TYPES, ['string', 'number', 'boolean'])
 })
 
-await check('renderCommand quotes strings and validates numbers', () => {
-  const line = renderCommand(sampleCommand(), { who: 'a b', count: 5, verbose: true })
-  assert.equal(line, "demo --name 'a b' --count 5 --verbose=yes")
+await check('renderDetail fills strings verbatim, without quoting', () => {
+  const text = renderDetail(sampleCommand(), { who: "it's a name with spaces", count: 5, verbose: true })
+  assert.equal(text, "demo --name it's a name with spaces --count 5 --verbose=yes")
 })
 
-await check('renderCommand makes a hostile string a single inert word', () => {
-  const line = renderCommand(sampleCommand(), { who: "'; rm -rf / #" })
-  assert.equal(line, "demo --name ''\\''; rm -rf / #' --count 3 --verbose=no")
+await check('renderDetail validates numbers and booleans', () => {
+  assert.throws(() => renderDetail(sampleCommand(), { who: 'x', count: '1; rm -rf /' }), /must be a number/)
+  assert.throws(() => renderDetail(sampleCommand(), { who: 'x', verbose: 'yes' }), /must be a boolean/)
 })
 
-await check('renderCommand rejects a non-numeric number argument', () => {
-  assert.throws(() => renderCommand(sampleCommand(), { who: 'x', count: '1; rm -rf /' }), /must be an integer/)
+await check('renderDetail rejects a missing required argument', () => {
+  assert.throws(() => renderDetail(sampleCommand(), {}), /"who" is required/)
 })
 
-await check('renderCommand rejects a missing required argument', () => {
-  assert.throws(() => renderCommand(sampleCommand(), {}), /"who" is required/)
-})
-
-await check('renderCommand enforces string choices', () => {
+await check('renderDetail enforces string choices', () => {
   const command = sampleCommand({
-    command: 'demo {{mode}}',
+    detail: 'demo {{mode}}',
     args: [{ name: 'mode', type: 'string', choices: ['fast', 'slow'] }],
   })
-  assert.equal(renderCommand(command, { mode: 'fast' }), "demo 'fast'")
-  assert.throws(() => renderCommand(command, { mode: 'other' }), /must be one of/)
+  assert.equal(renderDetail(command, { mode: 'fast' }), 'demo fast')
+  assert.throws(() => renderDetail(command, { mode: 'other' }), /must be one of/)
 })
 
-await check('renderCommand is single-pass: a value never expands a placeholder', () => {
-  const command = sampleCommand({
-    command: 'demo {{who}}',
-    args: [{ name: 'who', type: 'string' }],
-  })
-  assert.equal(renderCommand(command, { who: '{{who}}' }), "demo '{{who}}'")
+await check('renderDetail is single-pass: a value never expands a placeholder', () => {
+  const command = sampleCommand({ detail: 'demo {{who}}', args: [{ name: 'who', type: 'string' }] })
+  assert.equal(renderDetail(command, { who: '{{who}}' }), 'demo {{who}}')
 })
 
-await check('normalizeCommand accepts a well-formed command', () => {
+await check('a command without a detail answers with its description', () => {
+  const command = normalizeCommand({
+    name: 'lookup',
+    description: 'A demo command.',
+    args: [{ name: 'topic', type: 'string' }],
+  }, 0)
+  assert.equal(command.ok, true)
+  assert.equal(command.value.detail, undefined)
+  assert.equal(renderDetail(command.value, { topic: 'anything' }), 'A demo command.')
+})
+
+await check('normalizeCommand accepts a detail-only command', () => {
   const result = normalizeCommand(sampleCommand(), 0)
   assert.equal(result.ok, true)
   assert.equal(result.value.args.length, 3)
   assert.equal(result.value.description, 'A demo command.')
 })
 
-await check('normalizeCommand rejects an undeclared placeholder', () => {
-  const result = normalizeCommand(sampleCommand({ command: 'demo {{missing}}' }), 0)
-  assert.equal(result.ok, false)
-  assert.match(result.error, /undeclared placeholder/)
+await check('normalizeCommand accepts an argument-only command', () => {
+  const result = normalizeCommand({
+    name: 'lookup',
+    description: 'Look something up.',
+    args: [{ name: 'topic', type: 'string', required: true, description: 'What to look up.' }],
+  }, 0)
+  assert.equal(result.ok, true)
+  assert.equal(result.value.detail, undefined)
+  assert.equal(result.value.args.length, 1)
 })
 
-await check('normalizeCommand rejects an unused argument and a bad name', () => {
-  assert.match(normalizeCommand(sampleCommand({ command: 'demo' }), 0).error, /never used/)
+await check('normalizeCommand rejects a command with neither a detail nor an argument', () => {
+  const result = normalizeCommand({ name: 'empty', description: 'Nothing here.' }, 0)
+  assert.equal(result.ok, false)
+  assert.match(result.error, /needs a detail \(描述\) or at least one argument/)
+})
+
+await check('normalizeCommand migrates the pre-0.2.0 command field into detail', () => {
+  const result = normalizeCommand({
+    name: 'legacy',
+    description: 'Written before 0.2.0.',
+    command: 'legacy --help',
+  }, 0)
+  assert.equal(result.ok, true)
+  assert.equal(result.value.detail, 'legacy --help')
+  assert.equal(result.value.command, undefined)
+})
+
+await check('normalizeCommand rejects undeclared placeholders and unused arguments', () => {
+  assert.match(normalizeCommand(sampleCommand({ detail: 'demo {{missing}}' }), 0).error, /undeclared placeholder/)
+  assert.match(normalizeCommand(sampleCommand({ detail: 'demo' }), 0).error, /never used/)
+})
+
+await check('normalizeCommand rejects bad names, a missing description, and a bad type', () => {
   assert.match(normalizeCommand(sampleCommand({ name: '2bad' }), 0).error, /name must match/)
+  assert.match(normalizeCommand(sampleCommand({ description: '   ' }), 0).error, /description is required/)
+  assert.match(normalizeCommand(sampleCommand({ args: [{ name: 'x', type: 'integer' }], detail: 'demo {{x}}' }), 0).error, /type must be one of/)
+})
+
+await check('normalizeArgument keeps schema-only fields out of the wire shape', () => {
+  const argument = normalizeArgument({ name: 'mode', type: 'string', choices: ['a'], default: 'a' }, 0)
+  assert.equal(argument.ok, true)
+  assert.deepEqual(argument.value, { name: 'mode', type: 'string', choices: ['a'], default: 'a' })
 })
 
 await check('validateList keeps valid rows and reports invalid ones', () => {
   const report = validateList([
     sampleCommand(),
-    { name: 'bad', description: 'no command' },
-    sampleCommand({ name: 'demo2', command: 'demo2', args: [] }),
+    { name: 'bad', description: 'no detail and no args' },
+    sampleCommand({ name: 'demo2', detail: 'demo2', args: [] }),
     sampleCommand(),
   ])
   assert.deepEqual(report.commands.map((command) => command.name), ['demo', 'demo2'])
   assert.equal(report.errors.length, 2)
-  assert.match(report.errors[0].message, /command is required/)
+  assert.match(report.errors[0].message, /needs a detail/)
   assert.match(report.errors[1].message, /declared twice/)
 })
 
 await check('buildParameters projects the declared arguments', () => {
-  const parameters = buildParameters(sampleCommand())
+  const parameters = buildParameters(normalizeCommand(sampleCommand(), 0).value)
   assert.deepEqual(parameters.required, ['who'])
   assert.deepEqual(Object.keys(parameters.properties), ['who', 'count', 'verbose'])
-  assert.equal(parameters.properties.count.type, 'integer')
+  assert.equal(parameters.properties.count.type, 'number')
   assert.equal(parameters.properties.count.default, 3)
   assert.equal(parameters.additionalProperties, false)
 })
 
-await check('resolveConfig honours DSH_HOME and clamps the timeout', () => {
+await check('resolveConfig honours DSH_HOME', () => {
   const previousHome = process.env.DSH_HOME
-  const previousTimeout = process.env.DSH_TIMEOUT
-  void previousTimeout
   process.env.DSH_HOME = '/tmp/dmc-home'
   try {
-    const resolved = resolveConfig({ timeoutMs: 999_999_999 })
-    assert.equal(resolved.storePath, '/tmp/dmc-home/model-commands/commands.json')
-    assert.equal(resolved.timeoutMs, 3_600_000)
-    assert.equal(resolveConfig(undefined).dshHome, '/tmp/dmc-home')
+    assert.equal(resolveConfig(undefined).storePath, '/tmp/dmc-home/model-commands/commands.json')
+    assert.equal(resolveConfig({ storePath: '/tmp/custom.json' }).storePath, '/tmp/custom.json')
   } finally {
     if (previousHome === undefined) delete process.env.DSH_HOME
     else process.env.DSH_HOME = previousHome
   }
 })
 
-await check('the store round-trips and tolerates a corrupt file', async () => {
+await check('the store round-trips and tolerates a missing file', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'dmc-selftest-'))
   const storePath = join(directory, 'nested', 'commands.json')
   try {
@@ -168,54 +201,14 @@ await check('the store round-trips and tolerates a corrupt file', async () => {
   }
 })
 
-await check('formatRunResult reports exit code, streams, and truncation', () => {
-  const text = formatRunResult('demo', {
-    exitCode: 2,
-    signal: null,
-    timedOut: false,
-    aborted: false,
-    timeoutMs: 1000,
-    stdout: { text: 'out\n', truncated: true, spillPath: '/tmp/spill' },
-    stderr: { text: '', truncated: false },
-  })
-  assert.match(text, /^\$ demo\nexit code: 2/)
-  assert.match(text, /--- stdout ---\nout/)
-  assert.match(text, /\(empty\)/)
-  assert.match(text, /stdout was truncated; full output: \/tmp\/spill/)
-})
-
-await check('createToolDefinition wires the tool onto the composed shell', async () => {
-  const calls = []
-  const runtime = {
-    timeoutMs: 1000,
-    defaultCwd: undefined,
-    sandboxPolicy: () => undefined,
-    shell: {
-      resolve: (request) => ({ ...request, workdir: request.workdir ?? '/workspace' }),
-      execute: async (spec) => {
-        calls.push(spec)
-        return {
-          result: async () => ({
-            exitCode: 0,
-            signal: null,
-            timedOut: false,
-            aborted: false,
-            timeoutMs: spec.timeoutMs,
-            stdout: { text: 'done\n', truncated: false },
-            stderr: { text: '', truncated: false },
-          }),
-        }
-      },
-    },
-  }
-  const tool = createToolDefinition(normalizeCommand(sampleCommand(), 0).value, runtime)
-  const value = await tool.execute({ who: 'world' }, { agent: { session: { header: { cwd: '/workspace' } } }, signal: undefined })
+await check('createToolDefinition returns the rendered detail', async () => {
+  const tool = createToolDefinition(normalizeCommand(sampleCommand(), 0).value)
+  const value = await tool.execute({ who: 'world' }, {})
   assert.equal(tool.name, 'demo')
-  assert.match(value, /^\$ demo --name 'world' --count 3 --verbose=no/)
-  assert.match(value, /done/)
-  assert.equal(calls[0].command, "demo --name 'world' --count 3 --verbose=no")
-  assert.equal(calls[0].timeoutMs, 1000)
+  assert.equal(tool.description, 'A demo command.')
+  assert.equal(value, 'demo --name world --count 3 --verbose=no')
   assert.deepEqual(tool.output.render(undefined, value), [{ type: 'text', text: value }])
+  assert.deepEqual(tool.parameters.required, ['who'])
 })
 
 process.stdout.write(`\n${String(passed)} checks passed\n`)

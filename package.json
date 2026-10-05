@@ -1,7 +1,7 @@
 {
   "name": "@fufu1437/dsh-model-commands",
-  "version": "0.1.0",
-  "description": "Declare shell commands in the Harness settings page and every one of them becomes a tool the model can call directly.",
+  "version": "0.2.0",
+  "description": "Declare a command in Settings and the model gets a tool that hands back its usage, flags, and purpose on demand.",
   "type": "module",
   "license": "MIT",
   "author": "fufu1437",
@@ -21,7 +21,7 @@
     "cordis",
     "tools",
     "commands",
-    "cli"
+    "documentation"
   ],
   "exports": {
     ".": "./index.js",

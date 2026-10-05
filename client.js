@@ -5,11 +5,11 @@
  * that owns the command table the Host half turns into model-facing tools.
  *
  * The page is a management list: every stored command is a row showing the
- * tool name the model calls, its description, and the shell line it runs.
- * Adding or editing opens an inline form with the same fields the Host
- * validates. Saving sends the whole table to the Host's fenced route and
- * renders the Host's own diagnostics, so the browser never invents its own
- * validation rules.
+ * tool name the model calls, the one-line description it reads, and the first
+ * line of the body a call returns. Adding or editing opens an inline form with
+ * the same fields the Host validates. Saving sends the whole table to the
+ * Host's fenced route and renders the Host's own diagnostics, so the browser
+ * never invents its own validation rules.
  *
  * The module reads only `--dsw-alias-*` theme tokens and renders its own
  * controls, so it adds no dependency on any Harness Client package. The
@@ -34,7 +34,7 @@ window.__ModuleLoader__.load({
 
     const zh = {
       'section.title': '模型命令',
-      'page.intro': '在这里声明的每条命令都会成为模型可以直接调用的工具；命令通过本机 shell 执行。',
+      'page.intro': '在这里登记的每条命令都会成为模型可以调用的工具：说明让模型判断何时用它，描述是模型调用后拿到的帮助、参数与实际用途。',
       'page.store': '存储位置：{path}',
       'page.add': '新增命令',
       'page.empty': '还没有命令。点「新增命令」添加第一条。',
@@ -52,17 +52,15 @@ window.__ModuleLoader__.load({
       'form.nameHint': '字母开头，可含字母、数字、下划线和连字符',
       'form.title': '显示名（可留空）',
       'form.description': '说明（模型据此判断何时调用）',
-      'form.command': '命令行模板',
-      'form.commandHint': '用 {{参数名}} 占位；字符串参数会被 shell 转义',
-      'form.cwd': '工作目录（可留空，默认会话工作区）',
-      'form.timeout': '超时（毫秒，可留空）',
+      'form.detail': '描述（命令的帮助、参数与实际用途）',
+      'form.detailHint': '模型调用该工具时读到这段文字；可用 {{参数名}} 占位。描述与参数至少填一个，描述留空时返回「说明」。',
       'form.enabled': '启用（停用后模型看不到这条命令）',
       'form.args': '参数',
       'form.argName': '参数名',
       'form.argType': '类型',
       'form.argDescription': '说明',
       'form.argDefault': '默认值',
-      'form.argRequired': '必填',
+      'form.argRequired': '必须',
       'form.argAdd': '添加参数',
       'form.argRemove': '移除',
       'form.save': '保存',
@@ -75,7 +73,7 @@ window.__ModuleLoader__.load({
 
     const en = {
       'section.title': 'Model commands',
-      'page.intro': 'Every command declared here becomes a tool the model can call directly; it runs through this machine\'s shell.',
+      'page.intro': 'Every command registered here becomes a tool the model can call: the description is how it decides, the detail is the usage it receives.',
       'page.store': 'Stored at {path}',
       'page.add': 'Add command',
       'page.empty': 'No commands yet. Use "Add command" to create the first one.',
@@ -93,17 +91,15 @@ window.__ModuleLoader__.load({
       'form.nameHint': 'Starts with a letter; letters, digits, "_" and "-"',
       'form.title': 'Display name (optional)',
       'form.description': 'Description (how the model decides to call it)',
-      'form.command': 'Command-line template',
-      'form.commandHint': 'Use {{argument}} placeholders; string arguments are shell-quoted',
-      'form.cwd': 'Working directory (optional; defaults to the session workspace)',
-      'form.timeout': 'Timeout in ms (optional)',
+      'form.detail': 'Detail (usage, arguments, and what the command is for)',
+      'form.detailHint': 'What the model receives when it calls this tool; {{argument}} placeholders are allowed. A detail or at least one argument is required; with no detail the tool answers with the description.',
       'form.enabled': 'Enabled (disabled commands stay hidden from the model)',
       'form.args': 'Arguments',
       'form.argName': 'Name',
       'form.argType': 'Type',
       'form.argDescription': 'Description',
       'form.argDefault': 'Default',
-      'form.argRequired': 'Required',
+      'form.argRequired': 'Must',
       'form.argAdd': 'Add argument',
       'form.argRemove': 'Remove',
       'form.save': 'Save',
@@ -160,8 +156,12 @@ window.__ModuleLoader__.load({
 .dmc-input,.dmc-textarea,.dmc-select{box-sizing:border-box;width:100%;padding:5px 8px;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsw-radius-sm,6px);background:var(--dsw-alias-bg-layer-2,transparent);color:var(--dsw-alias-label-primary);font:inherit;font-size:13px;line-height:20px}
 .dmc-textarea{resize:vertical;min-height:56px}
 .dmc-check{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--dsw-alias-label-secondary)}
-.dmc-arg{display:grid;grid-template-columns:minmax(0,1.1fr) 96px minmax(0,1.6fr) minmax(0,.8fr) auto auto;gap:8px;align-items:center}
+.dmc-arg{display:grid;grid-template-columns:minmax(0,1fr) 104px minmax(0,1.5fr) minmax(0,.9fr) 52px minmax(64px,auto);gap:8px;align-items:center}
 .dmc-arg-head{font-size:12px;color:var(--dsw-alias-label-secondary)}
+.dmc-arg-head > span{padding-inline:9px}
+.dmc-arg-head > span:nth-child(5){padding-inline:0}
+.dmc-arg input[type=checkbox]{margin:0}
+.dmc-arg-btn{width:100%}
 .dmc-actions{display:flex;justify-content:flex-end;gap:8px}
 .dmc-notice{margin:0;padding:8px 10px;border-radius:var(--dsw-radius-sm,8px);border:1px solid var(--dsw-alias-border-l2);font-size:13px;line-height:19px;color:var(--dsw-alias-label-secondary);white-space:pre-wrap}
 .dmc-notice-error{border-color:var(--dsw-alias-state-error-primary);color:var(--dsw-alias-state-error-primary)}
@@ -220,11 +220,13 @@ window.__ModuleLoader__.load({
 
     /** @returns a blank draft command. */
     function blankDraft() {
-      return { name: '', title: '', description: '', command: '', cwd: '', timeoutMs: '', enabled: true, args: [] }
+      return { name: '', title: '', description: '', detail: '', enabled: true, args: [] }
     }
 
     /**
      * Turn a stored command into an editor draft.
+     * `command` is the pre-0.2.0 name of `detail`; an older stored row still
+     * opens with its text in the right field.
      * @param command - a command from the Host table.
      * @returns the draft.
      */
@@ -233,9 +235,7 @@ window.__ModuleLoader__.load({
         name: command.name ?? '',
         title: command.title ?? '',
         description: command.description ?? '',
-        command: command.command ?? '',
-        cwd: command.cwd ?? '',
-        timeoutMs: command.timeoutMs === undefined ? '' : String(command.timeoutMs),
+        detail: command.detail ?? command.command ?? '',
         enabled: command.enabled !== false,
         args: (command.args ?? []).map((argument) => ({
           name: argument.name ?? '',
@@ -250,7 +250,8 @@ window.__ModuleLoader__.load({
     /**
      * Turn an editor draft back into a wire command.
      * Empty optional text fields are omitted rather than sent as empty strings,
-     * and the Host validates everything that remains.
+     * and the Host validates everything that remains — including the rule that
+     * a detail or at least one argument must be present.
      * @param draft - the editor draft.
      * @returns the wire command.
      */
@@ -258,7 +259,6 @@ window.__ModuleLoader__.load({
       const command = {
         name: draft.name.trim(),
         description: draft.description.trim(),
-        command: draft.command,
         args: draft.args
           .filter((argument) => argument.name.trim().length > 0)
           .map((argument) => ({
@@ -269,10 +269,8 @@ window.__ModuleLoader__.load({
             ...(argument.required ? { required: true } : {}),
           })),
       }
+      if (draft.detail.trim().length > 0) command.detail = draft.detail
       if (draft.title.trim().length > 0) command.title = draft.title.trim()
-      if (draft.cwd.trim().length > 0) command.cwd = draft.cwd.trim()
-      const timeout = Number(draft.timeoutMs)
-      if (draft.timeoutMs.trim().length > 0 && Number.isFinite(timeout) && timeout > 0) command.timeoutMs = Math.floor(timeout)
       if (!draft.enabled) command.enabled = false
       return command
     }
@@ -284,7 +282,7 @@ window.__ModuleLoader__.load({
      * @returns the typed default value.
      */
     function coerceDefault(type, text) {
-      if (type === 'number' || type === 'integer') {
+      if (type === 'number') {
         const numeric = Number(text)
         return Number.isFinite(numeric) ? numeric : text
       }
@@ -343,7 +341,7 @@ window.__ModuleLoader__.load({
             value: argument.type,
             'aria-label': translate('form.argType'),
             onChange: (event) => { patch(index, { type: event.target.value }) },
-          }, ...['string', 'number', 'integer', 'boolean'].map((type) => h('option', { key: type, value: type }, type))),
+          }, ...['string', 'number', 'boolean'].map((type) => h('option', { key: type, value: type }, type))),
           h('input', {
             className: 'dmc-input',
             value: argument.description,
@@ -364,7 +362,7 @@ window.__ModuleLoader__.load({
           }),
           h('button', {
             type: 'button',
-            className: 'dmc-btn',
+            className: 'dmc-btn dmc-arg-btn',
             onClick: () => { remove(index) },
           }, translate('form.argRemove')))),
         h('div', null, h('button', {
@@ -392,12 +390,8 @@ window.__ModuleLoader__.load({
         h('input', { className: 'dmc-input', value: draft.title, onChange: (event) => { patch({ title: event.target.value }) } })),
       h(Field, { label: translate('form.description') },
         h('textarea', { className: 'dmc-textarea', rows: 2, value: draft.description, onChange: (event) => { patch({ description: event.target.value }) } })),
-      h(Field, { label: translate('form.command'), hint: translate('form.commandHint') },
-        h('textarea', { className: 'dmc-textarea dmc-mono', rows: 3, value: draft.command, onChange: (event) => { patch({ command: event.target.value }) } })),
-      h(Field, { label: translate('form.cwd') },
-        h('input', { className: 'dmc-input dmc-mono', value: draft.cwd, onChange: (event) => { patch({ cwd: event.target.value }) } })),
-      h(Field, { label: translate('form.timeout') },
-        h('input', { className: 'dmc-input', inputMode: 'numeric', value: draft.timeoutMs, onChange: (event) => { patch({ timeoutMs: event.target.value }) } })),
+      h(Field, { label: translate('form.detail'), hint: translate('form.detailHint') },
+        h('textarea', { className: 'dmc-textarea dmc-mono', rows: 6, value: draft.detail, onChange: (event) => { patch({ detail: event.target.value }) } })),
       h(ArgumentEditor, { args: draft.args, onChange: (args) => { patch({ args }) } }),
       h('label', { className: 'dmc-check' },
         h('input', { type: 'checkbox', checked: draft.enabled, onChange: (event) => { patch({ enabled: event.target.checked }) } }),
@@ -412,7 +406,24 @@ window.__ModuleLoader__.load({
      * @param props - the command and its row actions.
      * @returns the row element.
      */
+    /**
+     * One-line preview of a command's detail for the list row.
+     * @param detail - the stored detail text, or undefined.
+     * @returns the first non-empty line, truncated, or an empty string.
+     */
+    function preview(detail) {
+      if (typeof detail !== 'string') return ''
+      const line = detail.split('\n').map((text) => text.trim()).find((text) => text.length > 0) ?? ''
+      return line.length > 120 ? `${line.slice(0, 119)}…` : line
+    }
+
+    /**
+     * One stored command as a row.
+     * @param props - the command and its row actions.
+     * @returns the row element.
+     */
     function CommandRow({ command, onEdit, onDelete }) {
+      const summary = preview(command.detail ?? command.command)
       return h('li', { className: 'dmc-row' },
         h('div', { className: 'dmc-row-main' },
           h('div', { className: 'dmc-row-top' },
@@ -421,7 +432,7 @@ window.__ModuleLoader__.load({
             command.enabled === false ? h('span', { className: 'dmc-badge dmc-badge-off' }, translate('row.disabled')) : null,
             command.args.length === 0 ? null : h('span', { className: 'dmc-badge' }, translate('row.args', { count: command.args.length }))),
           h('div', { className: 'dmc-muted' }, command.description),
-          h('div', { className: 'dmc-row-cmd dmc-mono' }, command.command)),
+          summary.length === 0 ? null : h('div', { className: 'dmc-row-cmd dmc-mono' }, summary)),
         h('div', { className: 'dmc-row-actions' },
           h('button', { type: 'button', className: 'dmc-btn', onClick: onEdit }, translate('row.edit')),
           h('button', { type: 'button', className: 'dmc-btn dmc-btn-danger', onClick: onDelete }, translate('row.delete'))))
