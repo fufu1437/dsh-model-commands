@@ -134,9 +134,38 @@ await check('normalizeCommand migrates the pre-0.2.0 command field into detail',
   assert.equal(result.value.command, undefined)
 })
 
-await check('normalizeCommand rejects undeclared placeholders and unused arguments', () => {
-  assert.match(normalizeCommand(sampleCommand({ detail: 'demo {{missing}}' }), 0).error, /undeclared placeholder/)
-  assert.match(normalizeCommand(sampleCommand({ detail: 'demo' }), 0).error, /never used/)
+await check('an unknown placeholder stays literal and is only a warning', () => {
+  const result = normalizeCommand({ name: 'image', description: 'x', detail: 'uses {{path}} literally' }, 0)
+  assert.equal(result.ok, true)
+  assert.equal(result.warnings.length, 1)
+  assert.match(result.warnings[0], /\{\{path\}\} has no matching argument/)
+  assert.equal(renderDetail(result.value, {}), 'uses {{path}} literally')
+})
+
+await check('an argument the detail never mentions is a warning, not an error', () => {
+  const result = normalizeCommand(sampleCommand({ detail: 'demo', args: [{ name: 'whom', type: 'string' }] }), 0)
+  assert.equal(result.ok, true)
+  assert.match(result.warnings.join('\n'), /argument "whom" is never used/)
+})
+
+await check('a command with arguments but no detail warns that they do nothing', () => {
+  const result = normalizeCommand({ name: 'lookup', description: 'x', args: [{ name: 'topic', type: 'string' }] }, 0)
+  assert.equal(result.ok, true)
+  assert.match(result.warnings.join('\n'), /never affect the answer/)
+})
+
+await check('validateList keeps warnings separate from errors', () => {
+  const report = validateList([{ name: 'warned', description: 'x', detail: 'uses {{typo}}' }])
+  assert.equal(report.commands.length, 1)
+  assert.equal(report.errors.length, 0)
+  assert.equal(report.warnings.length, 1)
+})
+
+await check('any character is savable: braces, quotes, backslashes and newlines', () => {
+  const detail = 'a {{not-declared}} {single} \'quote\' "double" \\backslash\\ %s $HOME `tick`\n\ttab\n{{piped|thing}}'
+  const result = normalizeCommand({ name: 'chars', description: 'x', detail }, 0)
+  assert.equal(result.ok, true)
+  assert.equal(renderDetail(result.value, {}), detail)
 })
 
 await check('normalizeCommand rejects bad names, a missing description, and a bad type', () => {

@@ -18,9 +18,14 @@
  *   entry always has something to say.
  *
  * `detail` may contain `{{argument}}` placeholders filled from the call's
- * arguments, so one entry can cover several related invocations. Substitution
- * is single-pass and type-directed (see `renderDetail`), and the arguments are
- * projected onto a JSON Schema the model sees.
+ * arguments, so one entry can cover several related invocations. **Only a
+ * placeholder whose name is a declared argument is substituted; every other
+ * `{{...}}` stays exactly as written**, so pasting a real `--help` dump can
+ * never fail validation. Substitution is single-pass and type-directed (see
+ * `renderDetail`), and the arguments are projected onto a JSON Schema the model
+ * sees. A placeholder with no matching argument, or an argument the detail never
+ * mentions, is reported as a warning the settings page shows — never as a
+ * rejection.
  *
  * This plugin runs nothing. It hands the model the exact command line, its
  * flags, and its purpose; the model executes it with the tools the deployment
@@ -268,17 +273,22 @@ export function normalizeCommand(raw, index) {
   if (detail === undefined && args.length === 0) {
     return { ok: false, error: `${label}: a command needs a detail (描述) or at least one argument, so a call has something to answer with` }
   }
-  if (detail !== undefined) {
+  // Placeholders and arguments are reported, never enforced: the detail accepts
+  // any text, so a pasted help dump is always savable. Only a placeholder whose
+  // name is a declared argument is substituted at call time.
+  const warnings = []
+  if (detail === undefined) {
+    if (args.length > 0) {
+      warnings.push(`${label}: no detail, so ${args.length === 1 ? 'the argument' : 'the arguments'} never affect the answer (the tool returns the description)`)
+    }
+  } else {
     const placeholders = new Set()
     for (const match of detail.matchAll(PLACEHOLDER_PATTERN)) placeholders.add(match[1])
-    const undeclared = [...placeholders].filter((token) => !seen.has(token))
-    if (undeclared.length > 0) {
-      return { ok: false, error: `${label}: detail uses undeclared placeholder(s) ${undeclared.map((token) => `{{${token}}}`).join(', ')}` }
+    for (const token of placeholders) {
+      if (!seen.has(token)) warnings.push(`${label}: {{${token}}} has no matching argument and will stay literal`)
     }
     for (const token of seen) {
-      if (!placeholders.has(token)) {
-        return { ok: false, error: `${label}: argument "${token}" is declared but never used as {{${token}}} in the detail` }
-      }
+      if (!placeholders.has(token)) warnings.push(`${label}: argument "${token}" is never used in the detail`)
     }
   }
   return {
@@ -291,6 +301,7 @@ export function normalizeCommand(raw, index) {
       ...(isFilledString(raw.title) ? { title: raw.title.trim() } : {}),
       ...(raw.enabled === false ? { enabled: false } : {}),
     },
+    warnings,
   }
 }
 
@@ -298,13 +309,15 @@ export function normalizeCommand(raw, index) {
  * Normalize a whole table, keeping the valid entries and reporting the rest.
  * One bad row must not cost the user every other command.
  * @param list - the raw entries.
- * @returns normalized commands plus one diagnostic per rejected entry.
+ * @returns normalized commands, one diagnostic per rejected entry, and the
+ * advisory warnings of the accepted entries.
  */
 export function validateList(list) {
   const commands = []
   const errors = []
+  const warnings = []
   const names = new Set()
-  if (!Array.isArray(list)) return { commands, errors: [{ message: 'commands must be an array' }] }
+  if (!Array.isArray(list)) return { commands, errors: [{ message: 'commands must be an array' }], warnings }
   for (const [index, raw] of list.entries()) {
     const normalized = normalizeCommand(raw, index)
     if (!normalized.ok) {
@@ -317,8 +330,9 @@ export function validateList(list) {
     }
     names.add(normalized.value.name)
     commands.push(normalized.value)
+    for (const message of normalized.warnings ?? []) warnings.push({ index, name: normalized.value.name, message })
   }
-  return { commands, errors }
+  return { commands, errors, warnings }
 }
 
 /* -------------------------------------------------------------------------- */
@@ -364,7 +378,9 @@ export function renderArgument(argument, raw) {
 /**
  * Render the body a call returns.
  * Substitution is single-pass, so a value that itself contains `{{...}}` is
- * data, never a second round of template expansion. A command with no detail
+ * data, never a second round of template expansion. Only a placeholder whose
+ * name is a declared argument is replaced; every other `{{...}}` is left exactly
+ * as written, so the detail may contain any characters. A command with no detail
  * answers with its description.
  * @param command - the normalized definition.
  * @param args - the model-supplied argument object.
@@ -376,11 +392,7 @@ export function renderDetail(command, args) {
   const input = args !== null && typeof args === 'object' && !Array.isArray(args) ? args : {}
   const rendered = new Map()
   for (const argument of command.args) rendered.set(argument.name, renderArgument(argument, input[argument.name]))
-  return command.detail.replace(PLACEHOLDER_PATTERN, (_match, token) => {
-    const text = rendered.get(token)
-    if (text === undefined) throw new Error(`detail uses undeclared placeholder {{${token}}}`)
-    return text
-  })
+  return command.detail.replace(PLACEHOLDER_PATTERN, (match, token) => rendered.get(token) ?? match)
 }
 
 /**
@@ -477,7 +489,7 @@ async function readBoundedBody(req) {
  */
 export function apply(ctx, config) {
   const resolved = resolveConfig(config)
-  const state = { commands: [], errors: [], disposers: [] }
+  const state = { commands: [], errors: [], warnings: [], disposers: [] }
 
   /**
    * Replace the live tool registrations with the current table.
@@ -507,14 +519,15 @@ export function apply(ctx, config) {
   /**
    * Adopt a validated table: store it, re-register tools, and report.
    * @param list - raw entries from disk or from a request.
-   * @returns the accepted commands and every diagnostic.
+   * @returns the accepted commands, every diagnostic, and the advisory warnings.
    */
   const adopt = (list) => {
-    const { commands, errors } = validateList(list)
+    const { commands, errors, warnings } = validateList(list)
     state.commands = commands
     registerAll()
     state.errors = [...errors, ...state.errors]
-    return { commands, errors: state.errors }
+    state.warnings = warnings
+    return { commands, errors: state.errors, warnings: state.warnings }
   }
 
   ctx.effect(() => {
@@ -548,7 +561,7 @@ export function apply(ctx, config) {
           return
         }
         if (req.method === 'GET') {
-          sendJson(res, 200, { ok: true, storePath: resolved.storePath, commands: state.commands, errors: state.errors })
+          sendJson(res, 200, { ok: true, storePath: resolved.storePath, commands: state.commands, errors: state.errors, warnings: state.warnings })
           return
         }
         if (req.method !== 'POST') {
@@ -584,7 +597,7 @@ export function apply(ctx, config) {
         try {
           const report = await write
           ctx.logger?.info?.(`dsh-model-commands: saved ${String(report.commands.length)} command(s)`)
-          sendJson(res, 200, { ok: true, storePath: resolved.storePath, commands: report.commands, errors: report.errors })
+          sendJson(res, 200, { ok: true, storePath: resolved.storePath, commands: report.commands, errors: report.errors, warnings: report.warnings })
         } catch (error) {
           ctx.logger?.warn?.(`dsh-model-commands: save failed: ${String(error?.message ?? error)}`)
           sendJson(res, 500, { ok: false, code: 'save-failed', message: String(error?.message ?? error) })

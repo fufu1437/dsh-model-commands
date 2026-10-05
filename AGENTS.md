@@ -67,9 +67,13 @@ being silently mangled or from widening a `choices` contract.
 - Substitution happens in one `String.replace` pass, so a value that contains
   `{{other}}` is data, never a second expansion. Do not "fix" a nested
   placeholder by looping the replacement.
-- When a detail exists, placeholders and declared arguments must match exactly in
-  both directions: an undeclared placeholder and an unused argument are both
-  errors. When no detail exists, arguments are validated on their own.
+- **Only a declared argument name is substituted; every other `{{...}}` is
+  literal.** The detail must accept any text a user pastes, so a placeholder with
+  no matching argument is a warning, never a rejection. Do not reintroduce a hard
+  placeholder/argument cross-check.
+- An unmatched placeholder, an argument the detail never mentions, and arguments
+  with no detail at all are reported through the `warnings` channel (advisory,
+  shown as a dismissible banner). Keep them out of `errors`, which blocks a save.
 - There is no `integer` type: `number` covers integral values deliberately.
 
 ## Table and routes

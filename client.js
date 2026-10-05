@@ -53,7 +53,7 @@ window.__ModuleLoader__.load({
       'form.title': '显示名（可留空）',
       'form.description': '说明（模型据此判断何时调用）',
       'form.detail': '描述（命令的帮助、参数与实际用途）',
-      'form.detailHint': '模型调用该工具时读到这段文字；可用 {{参数名}} 占位。描述与参数至少填一个，描述留空时返回「说明」。最多 32768 字符，可直接粘贴 --help 输出。',
+      'form.detailHint': '模型调用该工具时读到这段文字。只有与「参数」同名的 {{名字}} 会被替换，其它 {{...}} 原样保留——任意文本都可以粘贴。描述与参数至少填一个，最多 32768 字符。',
       'form.enabled': '启用（停用后模型看不到这条命令）',
       'form.args': '参数',
       'form.argName': '参数名',
@@ -93,7 +93,7 @@ window.__ModuleLoader__.load({
       'form.title': 'Display name (optional)',
       'form.description': 'Description (how the model decides to call it)',
       'form.detail': 'Detail (usage, arguments, and what the command is for)',
-      'form.detailHint': 'What the model receives when it calls this tool; {{argument}} placeholders are allowed. A detail or at least one argument is required; with no detail the tool answers with the description. Up to 32768 characters — pasting a --help dump is fine.',
+      'form.detailHint': 'What the model receives when it calls this tool. Only a {{name}} matching a declared argument is substituted; every other {{...}} stays literal, so any text can be pasted. A detail or at least one argument is required; up to 32768 characters.',
       'form.enabled': 'Enabled (disabled commands stay hidden from the model)',
       'form.args': 'Arguments',
       'form.argName': 'Name',
@@ -170,6 +170,7 @@ window.__ModuleLoader__.load({
 .dmc-notice-close{flex:0 0 auto;width:20px;height:20px;padding:0;border:0;border-radius:4px;background:transparent;color:inherit;font:inherit;font-size:15px;line-height:18px;cursor:pointer;opacity:.7}
 .dmc-notice-close:hover{opacity:1;background:var(--dsw-alias-interactive-bg-hover)}
 .dmc-notice-error{border-color:var(--dsw-alias-state-error-primary);color:var(--dsw-alias-state-error-primary)}
+.dmc-notice-warn{border-color:var(--dsw-alias-state-warn-primary);color:var(--dsw-alias-state-warn-primary)}
 .dmc-notice-ok{border-color:var(--dsw-alias-border-l4,transparent)}
 .dmc-errors{margin:0;padding-left:18px}
 `
@@ -318,7 +319,8 @@ window.__ModuleLoader__.load({
      * @returns the banner element.
      */
     function Notice({ tone, onClose, children }) {
-      return h('div', { className: `dmc-notice ${tone === 'ok' ? 'dmc-notice-ok' : 'dmc-notice-error'}` },
+      const toneClass = tone === 'ok' ? 'dmc-notice-ok' : (tone === 'warn' ? 'dmc-notice-warn' : 'dmc-notice-error')
+      return h('div', { className: `dmc-notice ${toneClass}` },
         h('div', { className: 'dmc-notice-body' }, children),
         h('button', {
           type: 'button',
@@ -469,6 +471,7 @@ window.__ModuleLoader__.load({
       const [status, setStatus] = React.useState('loading')
       const [commands, setCommands] = React.useState([])
       const [errors, setErrors] = React.useState([])
+      const [warnings, setWarnings] = React.useState([])
       const [storePath, setStorePath] = React.useState('')
       const [draft, setDraft] = React.useState(null)
       const [saving, setSaving] = React.useState(false)
@@ -482,6 +485,7 @@ window.__ModuleLoader__.load({
           const data = await request('GET')
           setCommands(data.commands ?? [])
           setErrors(data.errors ?? [])
+          setWarnings(data.warnings ?? [])
           setStorePath(data.storePath ?? '')
           setStatus('ready')
         } catch (error) {
@@ -505,6 +509,7 @@ window.__ModuleLoader__.load({
           const problems = data.errors ?? []
           setCommands(data.commands ?? [])
           setErrors(problems)
+          setWarnings(data.warnings ?? [])
           setStorePath(data.storePath ?? storePath)
           setNotice(problems.length > 0 ? null : translate('form.saved', { count: (data.commands ?? []).length }))
           // Keep the editor open when the Host rejected something, so the draft
@@ -562,6 +567,8 @@ window.__ModuleLoader__.load({
         notice === null ? null : h(Notice, { tone: 'ok', onClose: () => { setNotice(null) } }, notice),
         errors.length === 0 ? null : h(Notice, { tone: 'error', onClose: () => { setErrors([]) } },
           h('ul', { className: 'dmc-errors' }, ...errors.map((error, index) => h('li', { key: String(index) }, error.message)))),
+        warnings.length === 0 ? null : h(Notice, { tone: 'warn', onClose: () => { setWarnings([]) } },
+          h('ul', { className: 'dmc-errors' }, ...warnings.map((warning, index) => h('li', { key: String(index) }, warning.message)))),
         draft === null
           ? h('div', { className: 'dmc-toolbar' },
             h('button', { type: 'button', className: 'dmc-btn dmc-btn-primary', onClick: startNew }, translate('page.add')),

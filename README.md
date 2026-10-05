@@ -85,15 +85,16 @@ substitution is single-pass and type-directed:
 - substitution happens in one pass, so a value containing `{{other}}` stays
   text.
 
-A detail that uses an undeclared placeholder, or an argument that is never used
-in the detail, is rejected by the Host, and the settings page shows the Host's
-own diagnostics. That rule exists to catch placeholder typos: the single braces
-common in CLI help (`{md5,sha1,sha256,sha512}`) are untouched, and only a paired
-`{{name}}` counts as a placeholder.
+**The detail accepts any characters.** Only a `{{name}}` that matches a declared
+argument is substituted at call time; every other `{{...}}` — placeholder-looking
+or not — is returned exactly as written. An unmatched `{{path}}`, or an argument
+the detail never mentions, appears as an advisory **warning** at the top of the
+settings page (a dismissible banner) and never blocks a save.
 
 **A `--help` dump can be pasted straight into the detail** (up to 32768
-characters, so a ten-thousand-character help output fits). The cost is paid once,
-when the model actually calls the command — not on every request.
+characters, so a ten-thousand-character help output fits; single braces
+`{md5,sha1}`, quotes, backslashes and newlines are preserved). The cost is paid
+once, when the model actually calls the command — not on every request.
 
 ## The settings page
 
