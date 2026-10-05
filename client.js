@@ -45,7 +45,7 @@ window.__ModuleLoader__.load({
       'badge.user': '用户创建',
       'badge.model': '模型创建',
       'badge.disabled': '已停用',
-      'badge.private': '仅我可调用',
+      'badge.userInvocable': '我也可以调用',
       'badge.hidden': '模型不可见',
       'row.edit': '编辑',
       'row.disable': '停用',
@@ -91,7 +91,7 @@ window.__ModuleLoader__.load({
       'badge.user': 'user',
       'badge.model': 'model',
       'badge.disabled': 'disabled',
-      'badge.private': 'you only',
+      'badge.userInvocable': 'you can too',
       'badge.hidden': 'model hidden',
       'row.edit': 'Edit',
       'row.disable': 'Disable',
@@ -351,7 +351,7 @@ window.__ModuleLoader__.load({
         skill.source === 'model' ? translate('badge.model') : translate('badge.user'),
       ]
       if (skill.modelInvocable === false) badges.push(translate('badge.hidden'))
-      if (skill.userInvocable === true) badges.push(translate('badge.private'))
+      if (skill.userInvocable === true) badges.push(translate('badge.userInvocable'))
       return h('li', { className: 'dmc-card' },
         h('div', { className: 'dmc-card-top' },
           h('span', { className: 'dmc-card-name dmc-mono' }, skill.name),
