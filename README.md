@@ -160,6 +160,10 @@ page** so the browser half loads.
   accepts and query `Tool.listTools`: if the tool is missing, the old module is
   still running.
 
+> On this machine the profile at `~/.dsh/profiles/web/cordis.patch.yml` already
+> enables that `hmr` row (`base` = this plugin directory, `root: ["."]`), so a
+> saved `index.js` reloads the plugin without a Harness restart.
+
 ## Behaviour and limits
 
 - **The plugin runs nothing**: no shell, no sandbox policy, no quoting, no exit

@@ -120,6 +120,8 @@ dsh plugin install @fufu1437/dsh-model-commands
 - 无论哪种方式，命令表都不会丢：它存在自己的 JSON 文件里。
 - 想知道当前跑的是哪一代 Host 代码：存一条只有新代码才接受的条目，再查 `Tool.listTools`；工具没出现就说明旧模块还在运行。
 
+> 本机这个 profile（`~/.dsh/profiles/web/cordis.patch.yml`）已经把上面那条 `hmr` 行打开了：`base` 指向本插件目录、`root: ["."]`，因此保存 `index.js` 会自动重载插件，无需重启 Harness。
+
 ## 行为与边界
 
 - **插件不执行任何命令**：没有 shell 注入、没有沙箱策略、没有引号转义、没有退出码。执行由模型用部署里已有的工具完成。
