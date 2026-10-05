@@ -113,7 +113,12 @@ dsh plugin install @fufu1437/dsh-model-commands
 
 ### 迭代开发
 
-包可以 link 进来直接改。`npm run check && npm test` 不需要 Harness 就能验证纯逻辑。运行中的进程会缓存已导入的 Host 模块，所以改完 `index.js` 要让这一行重新加载：本 profile 下修改 profile patch 是**即时生效**的，因此把 `<profile>/cordis.patch.yml` 里这一行的 `disabled` 翻转一次（`true` 再 `false`）即可热重载两个半部，无需重启 Harness。之后刷新页面以加载新的浏览器半部；命令表本身不会丢，它存在自己的 JSON 文件里。
+`npm run check && npm test` 不需要 Harness 就能验证纯逻辑。运行中的 Harness 能感知哪一半，取决于改的是哪个文件：
+
+- **`client.js`** 由客户端模块注册表从磁盘读取：把 `<profile>/cordis.patch.yml` 里这一行的 `disabled` 翻转一次（`true` 再 `false`）让插件行重建，然后刷新页面即可。
+- **`index.js` 不会热重载。** 本 profile 的 `hmr` 行配置为 `root: []`，Loader 会缓存已导入的模块，因此重建插件行只是用**已加载的那份代码**重新跑一遍 `apply`——路由回来了，但跑的还是旧代码。Host 半部的改动需要重启 Harness。想免重启，可以在 profile patch 里为这个目录打开模块监听（`- id: hmr` / `config: { base: /路径/到/dsh-plugin, root: ["."] }`），之后保存 `index.js` 就会自动重载。
+- 无论哪种方式，命令表都不会丢：它存在自己的 JSON 文件里。
+- 想知道当前跑的是哪一代 Host 代码：存一条只有新代码才接受的条目，再查 `Tool.listTools`；工具没出现就说明旧模块还在运行。
 
 ## 行为与边界
 

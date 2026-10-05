@@ -142,14 +142,23 @@ page** so the browser half loads.
 
 ### Iterating on the plugin
 
-The bundle can be linked and edited in place. `npm run check && npm test`
-exercises the pure logic without a Harness. For the running process, the Loader
-caches the imported Host module, so reload the row after editing `index.js`:
-changing that row in the profile patch is applied **live** in this profile, so
-flipping the entry's `disabled` in `<profile>/cordis.patch.yml` (`true`, then
-`false`) reloads both halves without a Harness restart. Refresh the page
-afterwards to pick up the new browser half; the command table itself survives,
-because it lives in its own JSON file.
+`npm run check && npm test` exercises the pure logic without a Harness. What the
+*running* Harness picks up differs per half:
+
+- **`client.js`** is read from disk by the client-module registry, so reloading
+  the plugin row (flip the entry's `disabled` in `<profile>/cordis.patch.yml`,
+  `true` then `false`) and refreshing the page is enough.
+- **`index.js` is not live-reloaded.** This profile's `hmr` row is configured
+  with `root: []`, and the Loader caches the imported module, so re-creating the
+  row re-runs `apply` from the **already-loaded** code — the route comes back,
+  but it is the old build. A Host-half change needs a Harness restart.
+  To avoid that, turn on module watching for this directory in the profile
+  patch and a saved `index.js` then reloads itself:
+  `- id: hmr` / `config: { base: /path/to/dsh-plugin, root: ["."] }`.
+- Either way the command table survives, because it lives in its own JSON file.
+- To check which Host generation is loaded, save an entry only the new code
+  accepts and query `Tool.listTools`: if the tool is missing, the old module is
+  still running.
 
 ## Behaviour and limits
 

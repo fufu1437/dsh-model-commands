@@ -69,6 +69,7 @@ window.__ModuleLoader__.load({
       'form.saved': '已保存 {count} 条命令。',
       'notice.saveFailed': '保存失败：{message}',
       'notice.loadFailed': '加载失败：{message}',
+      'notice.dismiss': '关闭提示',
     }
 
     const en = {
@@ -108,6 +109,7 @@ window.__ModuleLoader__.load({
       'form.saved': 'Saved {count} command(s).',
       'notice.saveFailed': 'Save failed: {message}',
       'notice.loadFailed': 'Load failed: {message}',
+      'notice.dismiss': 'Dismiss',
     }
 
     /** Literal fallback used before (or without) the host locale service. */
@@ -163,7 +165,10 @@ window.__ModuleLoader__.load({
 .dmc-arg input[type=checkbox]{margin:0}
 .dmc-arg-btn{width:100%}
 .dmc-actions{display:flex;justify-content:flex-end;gap:8px}
-.dmc-notice{margin:0;padding:8px 10px;border-radius:var(--dsw-radius-sm,8px);border:1px solid var(--dsw-alias-border-l2);font-size:13px;line-height:19px;color:var(--dsw-alias-label-secondary);white-space:pre-wrap}
+.dmc-notice{display:flex;align-items:flex-start;gap:8px;margin:0;padding:8px 10px;border-radius:var(--dsw-radius-sm,8px);border:1px solid var(--dsw-alias-border-l2);font-size:13px;line-height:19px;color:var(--dsw-alias-label-secondary)}
+.dmc-notice-body{flex:1;min-width:0;white-space:pre-wrap}
+.dmc-notice-close{flex:0 0 auto;width:20px;height:20px;padding:0;border:0;border-radius:4px;background:transparent;color:inherit;font:inherit;font-size:15px;line-height:18px;cursor:pointer;opacity:.7}
+.dmc-notice-close:hover{opacity:1;background:var(--dsw-alias-interactive-bg-hover)}
 .dmc-notice-error{border-color:var(--dsw-alias-state-error-primary);color:var(--dsw-alias-state-error-primary)}
 .dmc-notice-ok{border-color:var(--dsw-alias-border-l4,transparent)}
 .dmc-errors{margin:0;padding-left:18px}
@@ -304,6 +309,24 @@ window.__ModuleLoader__.load({
         h('span', null, label),
         children,
         hint === undefined ? null : h('span', { className: 'dmc-muted' }, hint))
+    }
+
+    /**
+     * A dismissible banner. Every banner in this page carries its own close
+     * button, so a stale diagnostic never traps the user in the editor.
+     * @param props - tone, the close handler, and the content.
+     * @returns the banner element.
+     */
+    function Notice({ tone, onClose, children }) {
+      return h('div', { className: `dmc-notice ${tone === 'ok' ? 'dmc-notice-ok' : 'dmc-notice-error'}` },
+        h('div', { className: 'dmc-notice-body' }, children),
+        h('button', {
+          type: 'button',
+          className: 'dmc-notice-close',
+          'aria-label': translate('notice.dismiss'),
+          title: translate('notice.dismiss'),
+          onClick: onClose,
+        }, '×'))
     }
 
     /**
@@ -526,7 +549,7 @@ window.__ModuleLoader__.load({
       if (status === 'loading') return h('div', { className: 'dmc-page' }, h('p', { className: 'dmc-muted' }, translate('page.loading')))
       if (status === 'failed') {
         return h('div', { className: 'dmc-page' },
-          h('p', { className: 'dmc-notice dmc-notice-error' }, failure),
+          h(Notice, { tone: 'error', onClose: () => { setFailure(null) } }, failure),
           h('div', { className: 'dmc-toolbar' }, h('button', { type: 'button', className: 'dmc-btn', onClick: () => { void load() } }, translate('page.retry'))))
       }
 
@@ -535,9 +558,9 @@ window.__ModuleLoader__.load({
           h('h2', { className: 'dmc-title' }, translate('section.title')),
           h('p', { className: 'dmc-muted' }, translate('page.intro')),
           storePath.length === 0 ? null : h('p', { className: 'dmc-muted dmc-mono' }, translate('page.store', { path: storePath }))),
-        failure === null ? null : h('p', { className: 'dmc-notice dmc-notice-error' }, failure),
-        notice === null ? null : h('p', { className: 'dmc-notice dmc-notice-ok' }, notice),
-        errors.length === 0 ? null : h('div', { className: 'dmc-notice dmc-notice-error' },
+        failure === null ? null : h(Notice, { tone: 'error', onClose: () => { setFailure(null) } }, failure),
+        notice === null ? null : h(Notice, { tone: 'ok', onClose: () => { setNotice(null) } }, notice),
+        errors.length === 0 ? null : h(Notice, { tone: 'error', onClose: () => { setErrors([]) } },
           h('ul', { className: 'dmc-errors' }, ...errors.map((error, index) => h('li', { key: String(index) }, error.message)))),
         draft === null
           ? h('div', { className: 'dmc-toolbar' },

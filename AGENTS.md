@@ -131,11 +131,14 @@ being silently mangled or from widening a `choices` contract.
   a number must throw, a value containing `{{x}}` must not expand, `choices`
   must be enforced, and a command with neither detail nor argument must be
   rejected. Do not delete them.
-- A Host-half change is **not live** in a running Harness until the row is
-  reloaded: the Loader caches the imported module. In the profile used here,
-  flipping the entry's `disabled` in `<profile>/cordis.patch.yml`
-  (`true`, then `false`) reloads live; refresh the page for the browser half.
-  The command table survives, because it lives in its own JSON file.
+- A Host-half change is **not live** until the Harness process restarts: the
+  Loader caches the imported module, and re-creating the row re-runs `apply`
+  from that **cached** generation — the route comes back, but it is the old
+  build. Only the client half is re-read from disk by the client-module
+  registry, so flipping the entry's `disabled` in
+  `<profile>/cordis.patch.yml` (`true`, then `false`) plus a page refresh is
+  enough for `client.js`. The command table survives either way, because it
+  lives in its own JSON file.
 - Evidence that a registration really reached the model is the live tool
   schema: query `cordis_inspect_query` (`Tool.listTools`) after a reload.
   Evidence that the page really mounted is the live slot occupant:
@@ -176,5 +179,11 @@ npm publish                # publishConfig pins access=public + registry.npmjs.o
 - **The Client module graph re-reads a bundle when an entry's fiber is
   (re)created**, not on every page load. Refresh after a reload; a stale graph
   serves the previous `client.js` bytes.
+- **A Host module is cached for the whole process when `hmr.root` is empty.**
+  An edit plus a row flip changes nothing: the same module generation runs
+  again, and an old validation message can resurface from a build that is no
+  longer on disk. To tell which generation is loaded, store an entry only the
+  new code accepts and query `Tool.listTools` — a missing tool means the old
+  module is live. Enabling `hmr` module watching avoids the restart entirely.
 - Use `cordis_inspect_query` (`Service`, `Event`, `Config`, `Slots`, `Theme`)
   before relying on a Harness API; the installed Harness is the authority.
