@@ -75,6 +75,27 @@ kubectl logs <pod> [-f] [--since=1h]
 
 **描述接受任意字符。** 只有与某个「参数」同名的 `{{名字}}` 会在调用时被替换；其它 `{{...}}`（哪怕看起来像占位符）一律原样输出。未匹配的 `{{path}}`、以及声明了却没在描述里用到的参数，只会作为**提示**显示在设置页顶部（黄色、可关闭的横幅），**不会阻止保存**。
 
+### 替换行为示例
+
+| 字段 | 值 |
+|---|---|
+| 工具名 | `kubectl_logs` |
+| 说明 | 需要查看 Kubernetes Pod 的日志时调用。 |
+| 描述 | `kubectl logs {{pod}} -n {{namespace}}{{follow}} --since={{since}}` |
+| 参数 | `pod` string 必须；`namespace` string 默认 `default`；`follow` boolean，`trueText` = `" -f"`、`falseText` = `""`；`since` string，choices `30m / 1h / 6h`，默认 `1h` |
+
+模型调用时传入的参数 → 工具返回的正文：
+
+| 模型传的参数 | 返回 |
+|---|---|
+| `{pod:"web-0", namespace:"prod", follow:true, since:"6h"}` | `kubectl logs web-0 -n prod -f --since=6h` |
+| `{pod:"web-0"}`（省略的用默认值） | `kubectl logs web-0 -n default --since=1h` |
+| `{pod:"{{namespace}}", namespace:"prod"}` | `kubectl logs {{namespace}} -n prod --since=1h`（值里的花括号不会二次展开） |
+| `{}`（漏掉必须的参数） | 调用失败：`argument "pod" is required` |
+| `{pod:"x", since:"2h"}`（不在 choices 里） | 调用失败：`argument "since" must be one of "30m", "1h", "6h"` |
+
+其它行为：`number` 会规范化（`"007"` → `7`，`"1e3"` → `1000`，`"abc"` 报错）；`boolean` 只代入你写的 `trueText`/`falseText`；没声明过的 `{{path}}` 原样保留。
+
 **可以直接把 `--help` 的输出整段粘进「描述」**（上限 32768 字符，约一万多字符的 help 完全放得下；单花括号 `{md5,sha1}`、引号、反斜杠、换行都原样保留）。代价只在模型真正调用这条命令时付一次，不常驻上下文。
 
 ## 设置页

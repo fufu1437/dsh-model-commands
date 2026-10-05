@@ -91,6 +91,29 @@ or not — is returned exactly as written. An unmatched `{{path}}`, or an argume
 the detail never mentions, appears as an advisory **warning** at the top of the
 settings page (a dismissible banner) and never blocks a save.
 
+### Worked example
+
+| Field | Value |
+|---|---|
+| Tool name | `kubectl_logs` |
+| Description | Call this when you need the logs of a Kubernetes pod. |
+| Detail | `kubectl logs {{pod}} -n {{namespace}}{{follow}} --since={{since}}` |
+| Arguments | `pod` string, must; `namespace` string, default `default`; `follow` boolean, `trueText` `" -f"`, `falseText` `""`; `since` string, choices `30m / 1h / 6h`, default `1h` |
+
+What the model passes → what the call returns:
+
+| Arguments | Result |
+|---|---|
+| `{pod:"web-0", namespace:"prod", follow:true, since:"6h"}` | `kubectl logs web-0 -n prod -f --since=6h` |
+| `{pod:"web-0"}` (the rest default) | `kubectl logs web-0 -n default --since=1h` |
+| `{pod:"{{namespace}}", namespace:"prod"}` | `kubectl logs {{namespace}} -n prod --since=1h` (a value is never re-expanded) |
+| `{}` (a must-argument is missing) | the call fails: `argument "pod" is required` |
+| `{pod:"x", since:"2h"}` (outside choices) | the call fails: `argument "since" must be one of "30m", "1h", "6h"` |
+
+Other behaviour: `number` is normalized (`"007"` → `7`, `"1e3"` → `1000`, `"abc"`
+fails); `boolean` substitutes only your `trueText`/`falseText`; an undeclared
+`{{path}}` stays literal.
+
 **A `--help` dump can be pasted straight into the detail** (up to 32768
 characters, so a ten-thousand-character help output fits; single braces
 `{md5,sha1}`, quotes, backslashes and newlines are preserved). The cost is paid
