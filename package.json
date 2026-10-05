@@ -1,0 +1,69 @@
+{
+  "name": "@fufu1437/dsh-model-commands",
+  "version": "0.1.0",
+  "description": "Declare shell commands in the Harness settings page and every one of them becomes a tool the model can call directly.",
+  "type": "module",
+  "license": "MIT",
+  "author": "fufu1437",
+  "homepage": "https://github.com/fufu1437/dsh-model-commands",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/fufu1437/dsh-model-commands.git"
+  },
+  "bugs": {
+    "url": "https://github.com/fufu1437/dsh-model-commands/issues"
+  },
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "dsh-plugin",
+    "dsh-bundle",
+    "cordis",
+    "tools",
+    "commands",
+    "cli"
+  ],
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json"
+  },
+  "main": "index.js",
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "icon.svg",
+    "locale",
+    "scripts",
+    "README.md",
+    "README.zh.md",
+    "LICENSE"
+  ],
+  "icon": "./icon.svg",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "check": "node --check index.js && node --check client.js",
+    "test": "node scripts/selftest.mjs",
+    "prepublishOnly": "npm run check && npm test"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-settings-general"
+      ]
+    }
+  }
+}

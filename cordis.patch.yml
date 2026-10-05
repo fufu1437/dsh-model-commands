@@ -1,0 +1,8 @@
+# Bundle layer of @fufu1437/dsh-model-commands.
+#
+# One Host row registers a model-facing tool per stored command and serves the
+# fenced command-table routes; the package's `dsh.client` section composes the
+# browser half that renders the Settings → Model commands page.
+- insert:
+    - id: fufu-model-commands
+      name: '@fufu1437/dsh-model-commands'

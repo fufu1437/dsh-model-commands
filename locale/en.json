@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Model commands",
+    "description": "Declare shell commands in Settings and every one of them becomes a tool the model can call directly."
+  }
+}
