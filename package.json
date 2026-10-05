@@ -1,7 +1,7 @@
 {
   "name": "@fufu1437/dsh-model-commands",
-  "version": "0.2.0",
-  "description": "Declare a command in Settings and the model gets a tool that hands back its usage, flags, and purpose on demand.",
+  "version": "0.3.0",
+  "description": "Author your own skills in the Harness Settings page: every entry is published into the skill registry, so the model sees one line and loads the body on demand.",
   "type": "module",
   "license": "MIT",
   "author": "fufu1437",
@@ -19,9 +19,9 @@
     "dsh-plugin",
     "dsh-bundle",
     "cordis",
-    "tools",
-    "commands",
-    "documentation"
+    "skills",
+    "skill",
+    "settings"
   ],
   "exports": {
     ".": "./index.js",

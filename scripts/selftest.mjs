@@ -2,8 +2,8 @@
  * Self-test for `@fufu1437/dsh-model-commands`.
  *
  * The module under test imports only `node:` builtins, so it runs without a
- * Harness: this exercises argument rendering, table validation, the durable
- * store, and the tool definition the Host hands to `ctx.tools`.
+ * Harness: this exercises record validation, the durable table, and the skill
+ * provider the registry consumes.
  *
  * Run with `npm test` (or `node scripts/selftest.mjs`) from the package root.
  */
@@ -13,19 +13,17 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { ARG_TYPES, __test } from '../index.js'
+import { NAME_PATTERN, PROVIDER_NAME, __test } from '../index.js'
 
 const {
   resolveConfig,
   readStore,
   writeStore,
-  normalizeArgument,
-  normalizeCommand,
+  normalizeSkill,
   validateList,
-  renderArgument,
-  renderDetail,
-  buildParameters,
-  createToolDefinition,
+  skillSummary,
+  skillCandidate,
+  createSkillProvider,
 } = __test
 
 let passed = 0
@@ -41,203 +39,143 @@ async function check(label, body) {
   process.stdout.write(`ok ${String(passed)} - ${label}\n`)
 }
 
-/** @returns a minimal valid command for the rendering tests. */
-function sampleCommand(overrides = {}) {
+/** @returns a minimal valid entry. */
+function sampleSkill(overrides = {}) {
   return {
-    name: 'demo',
-    description: 'A demo command.',
-    detail: 'demo --name {{who}} --count {{count}} --verbose={{verbose}}',
-    args: [
-      { name: 'who', type: 'string', required: true },
-      { name: 'count', type: 'number', default: 3 },
-      { name: 'verbose', type: 'boolean', trueText: 'yes', falseText: 'no' },
-    ],
+    name: 'disk-usage',
+    description: 'Report free space for one path with df.',
+    content: '# Disk usage\n\nRun `df -h <path>` and read the Avail column.',
     ...overrides,
   }
 }
 
-await check('the type set has no integer: number covers integral values', () => {
-  assert.deepEqual(ARG_TYPES, ['string', 'number', 'boolean'])
-})
-
-await check('renderDetail fills strings verbatim, without quoting', () => {
-  const text = renderDetail(sampleCommand(), { who: "it's a name with spaces", count: 5, verbose: true })
-  assert.equal(text, "demo --name it's a name with spaces --count 5 --verbose=yes")
-})
-
-await check('renderDetail validates numbers and booleans', () => {
-  assert.throws(() => renderDetail(sampleCommand(), { who: 'x', count: '1; rm -rf /' }), /must be a number/)
-  assert.throws(() => renderDetail(sampleCommand(), { who: 'x', verbose: 'yes' }), /must be a boolean/)
-})
-
-await check('renderDetail rejects a missing required argument', () => {
-  assert.throws(() => renderDetail(sampleCommand(), {}), /"who" is required/)
-})
-
-await check('renderDetail enforces string choices', () => {
-  const command = sampleCommand({
-    detail: 'demo {{mode}}',
-    args: [{ name: 'mode', type: 'string', choices: ['fast', 'slow'] }],
-  })
-  assert.equal(renderDetail(command, { mode: 'fast' }), 'demo fast')
-  assert.throws(() => renderDetail(command, { mode: 'other' }), /must be one of/)
-})
-
-await check('renderDetail is single-pass: a value never expands a placeholder', () => {
-  const command = sampleCommand({ detail: 'demo {{who}}', args: [{ name: 'who', type: 'string' }] })
-  assert.equal(renderDetail(command, { who: '{{who}}' }), 'demo {{who}}')
-})
-
-await check('a command without a detail answers with its description', () => {
-  const command = normalizeCommand({
-    name: 'lookup',
-    description: 'A demo command.',
-    args: [{ name: 'topic', type: 'string' }],
-  }, 0)
-  assert.equal(command.ok, true)
-  assert.equal(command.value.detail, undefined)
-  assert.equal(renderDetail(command.value, { topic: 'anything' }), 'A demo command.')
-})
-
-await check('normalizeCommand accepts a detail-only command', () => {
-  const result = normalizeCommand(sampleCommand(), 0)
-  assert.equal(result.ok, true)
-  assert.equal(result.value.args.length, 3)
-  assert.equal(result.value.description, 'A demo command.')
-})
-
-await check('normalizeCommand accepts an argument-only command', () => {
-  const result = normalizeCommand({
-    name: 'lookup',
-    description: 'Look something up.',
-    args: [{ name: 'topic', type: 'string', required: true, description: 'What to look up.' }],
-  }, 0)
-  assert.equal(result.ok, true)
-  assert.equal(result.value.detail, undefined)
-  assert.equal(result.value.args.length, 1)
-})
-
-await check('normalizeCommand rejects a command with neither a detail nor an argument', () => {
-  const result = normalizeCommand({ name: 'empty', description: 'Nothing here.' }, 0)
-  assert.equal(result.ok, false)
-  assert.match(result.error, /needs a detail \(描述\) or at least one argument/)
-})
-
-await check('normalizeCommand migrates the pre-0.2.0 command field into detail', () => {
-  const result = normalizeCommand({
-    name: 'legacy',
-    description: 'Written before 0.2.0.',
-    command: 'legacy --help',
-  }, 0)
-  assert.equal(result.ok, true)
-  assert.equal(result.value.detail, 'legacy --help')
-  assert.equal(result.value.command, undefined)
-})
-
-await check('an unknown placeholder stays literal and is only a warning', () => {
-  const result = normalizeCommand({ name: 'image', description: 'x', detail: 'uses {{path}} literally' }, 0)
-  assert.equal(result.ok, true)
-  assert.equal(result.warnings.length, 1)
-  assert.match(result.warnings[0], /\{\{path\}\} has no matching argument/)
-  assert.equal(renderDetail(result.value, {}), 'uses {{path}} literally')
-})
-
-await check('an argument the detail never mentions is a warning, not an error', () => {
-  const result = normalizeCommand(sampleCommand({ detail: 'demo', args: [{ name: 'whom', type: 'string' }] }), 0)
-  assert.equal(result.ok, true)
-  assert.match(result.warnings.join('\n'), /argument "whom" is never used/)
-})
-
-await check('a command with arguments but no detail warns that they do nothing', () => {
-  const result = normalizeCommand({ name: 'lookup', description: 'x', args: [{ name: 'topic', type: 'string' }] }, 0)
-  assert.equal(result.ok, true)
-  assert.match(result.warnings.join('\n'), /never affect the answer/)
-})
-
-await check('validateList keeps warnings separate from errors', () => {
-  const report = validateList([{ name: 'warned', description: 'x', detail: 'uses {{typo}}' }])
-  assert.equal(report.commands.length, 1)
-  assert.equal(report.errors.length, 0)
-  assert.equal(report.warnings.length, 1)
-})
-
-await check('any character is savable: braces, quotes, backslashes and newlines', () => {
-  const detail = 'a {{not-declared}} {single} \'quote\' "double" \\backslash\\ %s $HOME `tick`\n\ttab\n{{piped|thing}}'
-  const result = normalizeCommand({ name: 'chars', description: 'x', detail }, 0)
-  assert.equal(result.ok, true)
-  assert.equal(renderDetail(result.value, {}), detail)
-})
-
-await check('normalizeCommand rejects bad names, a missing description, and a bad type', () => {
-  assert.match(normalizeCommand(sampleCommand({ name: '2bad' }), 0).error, /name must match/)
-  assert.match(normalizeCommand(sampleCommand({ description: '   ' }), 0).error, /description is required/)
-  assert.match(normalizeCommand(sampleCommand({ args: [{ name: 'x', type: 'integer' }], detail: 'demo {{x}}' }), 0).error, /type must be one of/)
-})
-
-await check('normalizeArgument keeps schema-only fields out of the wire shape', () => {
-  const argument = normalizeArgument({ name: 'mode', type: 'string', choices: ['a'], default: 'a' }, 0)
-  assert.equal(argument.ok, true)
-  assert.deepEqual(argument.value, { name: 'mode', type: 'string', choices: ['a'], default: 'a' })
-})
-
-await check('validateList keeps valid rows and reports invalid ones', () => {
-  const report = validateList([
-    sampleCommand(),
-    { name: 'bad', description: 'no detail and no args' },
-    sampleCommand({ name: 'demo2', detail: 'demo2', args: [] }),
-    sampleCommand(),
-  ])
-  assert.deepEqual(report.commands.map((command) => command.name), ['demo', 'demo2'])
-  assert.equal(report.errors.length, 2)
-  assert.match(report.errors[0].message, /needs a detail/)
-  assert.match(report.errors[1].message, /declared twice/)
-})
-
-await check('buildParameters projects the declared arguments', () => {
-  const parameters = buildParameters(normalizeCommand(sampleCommand(), 0).value)
-  assert.deepEqual(parameters.required, ['who'])
-  assert.deepEqual(Object.keys(parameters.properties), ['who', 'count', 'verbose'])
-  assert.equal(parameters.properties.count.type, 'number')
-  assert.equal(parameters.properties.count.default, 3)
-  assert.equal(parameters.additionalProperties, false)
-})
-
-await check('resolveConfig honours DSH_HOME', () => {
+await check('resolveConfig honours DSH_HOME and the row overrides', () => {
   const previousHome = process.env.DSH_HOME
   process.env.DSH_HOME = '/tmp/dmc-home'
   try {
-    assert.equal(resolveConfig(undefined).storePath, '/tmp/dmc-home/model-commands/commands.json')
-    assert.equal(resolveConfig({ storePath: '/tmp/custom.json' }).storePath, '/tmp/custom.json')
+    const resolved = resolveConfig(undefined)
+    assert.equal(resolved.storePath, '/tmp/dmc-home/model-commands/skills.json')
+    assert.equal(resolved.maxSkills, 200)
+    assert.equal(resolveConfig({ storePath: '/tmp/custom.json', maxSkills: 5 }).storePath, '/tmp/custom.json')
+    assert.equal(resolveConfig({ maxSkills: 5 }).maxSkills, 5)
   } finally {
     if (previousHome === undefined) delete process.env.DSH_HOME
     else process.env.DSH_HOME = previousHome
   }
 })
 
-await check('the store round-trips and tolerates a missing file', async () => {
+await check('normalizeSkill accepts a well-formed entry and fills the defaults', () => {
+  const result = normalizeSkill(sampleSkill(), 0)
+  assert.equal(result.ok, true)
+  assert.equal(result.value.name, 'disk-usage')
+  assert.equal(result.value.modelInvocable, true)
+  assert.equal(result.value.userInvocable, false)
+  assert.equal(result.value.enabled, true)
+  assert.equal(result.value.source, 'user')
+  assert.equal(typeof result.value.id, 'string')
+  assert.match(result.value.updatedAt, /^\d{4}-/)
+  assert.deepEqual(result.warnings, [])
+})
+
+await check('normalizeSkill preserves an existing id, createdAt, and source', () => {
+  const result = normalizeSkill(sampleSkill({ id: 'abc', createdAt: '2026-01-01T00:00:00.000Z', source: 'model' }), 0)
+  assert.equal(result.value.id, 'abc')
+  assert.equal(result.value.createdAt, '2026-01-01T00:00:00.000Z')
+  assert.equal(result.value.source, 'model')
+})
+
+await check('the name must be kebab-case', () => {
+  assert.equal(NAME_PATTERN.test('disk-usage'), true)
+  assert.equal(NAME_PATTERN.test('disk_usage'), false)
+  assert.equal(NAME_PATTERN.test('Disk-Usage'), false)
+  assert.equal(NAME_PATTERN.test('disk usage'), false)
+  for (const name of ['disk_usage', 'Disk-Usage', '-lead', 'trail-', '']) {
+    const result = normalizeSkill(sampleSkill({ name }), 0)
+    assert.equal(result.ok, false, `${name} should be rejected`)
+    assert.match(result.error, /kebab-case/)
+  }
+})
+
+await check('description and content are required', () => {
+  assert.match(normalizeSkill(sampleSkill({ description: '   ' }), 0).error, /description is required/)
+  assert.match(normalizeSkill(sampleSkill({ content: '' }), 0).error, /content is required/)
+  assert.match(normalizeSkill(sampleSkill({ description: 'x'.repeat(4097) }), 0).error, /description must be at most/)
+  assert.match(normalizeSkill(sampleSkill({ content: 'x'.repeat(65_537) }), 0).error, /content must be at most/)
+  assert.match(normalizeSkill(sampleSkill({ whenToUse: 'x'.repeat(1025) }), 0).error, /whenToUse must be/)
+  assert.match(normalizeSkill('nope', 0).error, /must be an object/)
+})
+
+await check('a user-only entry warns that the model cannot see it', () => {
+  const result = normalizeSkill(sampleSkill({ userInvocable: true, modelInvocable: false }), 0)
+  assert.equal(result.ok, true)
+  assert.equal(result.warnings.length, 1)
+  assert.match(result.warnings[0], /only you can invoke it/)
+})
+
+await check('validateList keeps valid rows and reports invalid ones', () => {
+  const report = validateList([
+    sampleSkill(),
+    { name: 'bad name', description: 'x', content: 'y' },
+    sampleSkill({ name: 'other' }),
+    sampleSkill(),
+  ])
+  assert.deepEqual(report.skills.map((skill) => skill.name), ['disk-usage', 'other'])
+  assert.equal(report.errors.length, 2)
+  assert.match(report.errors[0].message, /kebab-case/)
+  assert.match(report.errors[1].message, /declared twice/)
+})
+
+await check('validateList enforces the table ceiling and the array shape', () => {
+  assert.match(validateList({}, 5).errors[0].message, /skills must be an array/)
+  assert.match(validateList([sampleSkill()], 0).errors[0].message, /at most 0 skills/)
+})
+
+await check('the published summary mirrors the skill contract', () => {
+  const skill = normalizeSkill(sampleSkill({ whenToUse: 'When df is available.', userInvocable: true }), 0).value
+  const summary = skillSummary(skill)
+  assert.deepEqual(Object.keys(summary).sort(), ['description', 'invocation', 'name', 'provider', 'source', 'whenToUse'])
+  assert.equal(summary.provider, PROVIDER_NAME)
+  assert.equal(summary.source, 'runtime')
+  assert.deepEqual(summary.invocation, { modelInvocable: true, userInvocable: true })
+  const candidate = skillCandidate(skill)
+  assert.equal(candidate.locator, skill.id)
+  assert.equal(typeof candidate.rank, 'number')
+})
+
+await check('the provider lists enabled entries and loads a body by locator', async () => {
+  const state = {
+    skills: validateList([
+      sampleSkill(),
+      sampleSkill({ name: 'hidden-one', enabled: false }),
+    ]).skills,
+  }
+  const provider = createSkillProvider(state)
+  assert.equal(provider.name, PROVIDER_NAME)
+  const listed = await provider.list({})
+  assert.equal(listed.complete, true)
+  assert.deepEqual(listed.candidates.map((candidate) => candidate.name), ['disk-usage'])
+  const loaded = await provider.get(listed.candidates[0], {})
+  assert.equal(loaded.name, 'disk-usage')
+  assert.match(loaded.content, /df -h/)
+  assert.equal((await provider.get({ locator: 'missing' }, {})), undefined)
+  const disabled = state.skills.find((skill) => skill.name === 'hidden-one')
+  assert.equal((await provider.get({ locator: disabled.id }, {})), undefined)
+})
+
+await check('the table round-trips and tolerates a missing file', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'dmc-selftest-'))
-  const storePath = join(directory, 'nested', 'commands.json')
+  const storePath = join(directory, 'nested', 'skills.json')
   try {
     assert.deepEqual(readStore(storePath), [])
-    const report = validateList([sampleCommand()])
-    await writeStore(storePath, report.commands)
-    assert.deepEqual(readStore(storePath).map((command) => command.name), ['demo'])
+    const report = validateList([sampleSkill()])
+    await writeStore(storePath, report.skills)
+    assert.deepEqual(readStore(storePath).map((skill) => skill.name), ['disk-usage'])
     const warnings = []
     assert.deepEqual(readStore(join(directory, 'missing.json'), (text) => warnings.push(text)), [])
     assert.equal(warnings.length, 0)
   } finally {
     await rm(directory, { recursive: true, force: true })
   }
-})
-
-await check('createToolDefinition returns the rendered detail', async () => {
-  const tool = createToolDefinition(normalizeCommand(sampleCommand(), 0).value)
-  const value = await tool.execute({ who: 'world' }, {})
-  assert.equal(tool.name, 'demo')
-  assert.equal(tool.description, 'A demo command.')
-  assert.equal(value, 'demo --name world --count 3 --verbose=no')
-  assert.deepEqual(tool.output.render(undefined, value), [{ type: 'text', text: value }])
-  assert.deepEqual(tool.parameters.required, ['who'])
 })
 
 process.stdout.write(`\n${String(passed)} checks passed\n`)

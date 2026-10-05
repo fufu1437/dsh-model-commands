@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Model commands",
-    "description": "Declare a command in Settings and the model gets a tool that hands back its usage, flags, and purpose on demand."
+    "description": "Author your own skills in Settings. Each entry is published into the Harness skill registry: the model sees one line and loads the body on demand."
   }
 }
